@@ -11,7 +11,7 @@ import uuid
 import datetime as dt
 
 
-class Dataset:
+class Reader:
     def __init__(
         self,
         path: str,
@@ -23,51 +23,127 @@ class Dataset:
         self._filesystem = filesystem
         self._format = format
         self._partitioning = partitioning
-        self._db = duckdb.connect()
-        self._db.execute("SET temp_director='/tmp/duckdb/'")
+        self.ddb = duckdb.connect()
+        self.execute("SET temp_directory='/tmp/duckdb/'")
 
-    def _load_dataset(self, name: str = "dataset", **kwargs):
+    def _load_dataset(self, name: str = "pa_dataset", **kwargs):
 
-        self._ds = ds.dataset(
+        self._pa_dataset = ds.dataset(
             source=self._path,
             format=self._format,
             filesystem=self._filesystem,
             partitioning=self._partitioning,
             **kwargs,
         )
-        self._db.register(name, self._ds)
+        self.ddb.register(name, self._pa_dataset)
 
-    def _load_table(self, name: str = "mem_table", **kwargs):
+    def _load_table(self, name: str = "pa_table", **kwargs):
         if self._format == "parquet":
-            self._table = pq.read_table(
+            self._pa_table = pq.read_table(
                 self._path,
                 partitioning=self._partitioning,
                 filesystem=self._filesystem,
                 **kwargs,
             )
 
-        # elif self._format == "feather":
         else:
             if self._filesystem is not None:
-                if self._filesystem.get_file_info(self._path).is_file:
-                    with self._filesystem.open_input_file(self._path) as f:
-                        self._table = pf.read_feather(f, **kwargs)
+                if hasattr(self._filesystem, "isfile"):
+                    if self._filesystem.isfile(self._path):
+                        with self._filesystem.open(self._path) as f:
+                            self._pa_table = pf.read_feather(f, **kwargs)
+                    else:
+                        if not hasattr(self, "_ds"):
+                            self._load_dataset()
+                        self._pa_table = self._pa_dataset.to_table(**kwargs)
                 else:
-                    if not hasattr(self, "_ds"):
-                        self._load_dataset()
+                    if self._filesystem.get_file_info(self._path).is_file:
+                        with self._filesystem.open_input_file(self._path) as f:
+                            self._pa_table = pf.read_feather(f, **kwargs)
+                    else:
+                        if not hasattr(self, "_ds"):
+                            self._load_dataset()
 
-                    self._table = self._ds.to_table(**kwargs)
+                        self._pa_table = self._pa_dataset.to_table(**kwargs)
 
             else:
                 if Path(self._path).is_file():
-                    self._table = pf.read_feather(self._path, **kwargs)
+                    self._pa_table = pf.read_feather(self._path, **kwargs)
                 else:
                     if not hasattr(self, "_ds"):
                         self._load_dataset()
 
-                    self._table = self._ds.to_table(**kwargs)
+                    self._pa_table = self._pa_dataset.to_table(**kwargs)
 
-        self._db.register(name, self._table)
+        self.ddb.register(name, self._pa_table)
+        
+    def create_temp_table(self, name:str="temp_table", **kwargs):
+        if hasattr(self, "_pa_table"):
+            self.execute(f"CREATE OR REPLACE TEMP TABLE {name} AS SELECT * FROM pa_table")
+            
+        else:
+            if not hasattr(self, '_pa_dataset'):
+                self._load_dataset(**kwargs)
+                
+            self.execute(
+                    f"CREATE OR REPLACE TEMP TABLE {name} AS SELECT * FROM pa_dataset"
+                )
+    
+    def query(self, *args, **kwargs):
+        return self.ddb.query(*args, **kwargs)
+    
+    def execute(self, *args, **kwargs):
+        return self.ddb.execute(*args, **kwargs)
+    
+    def filter(self, *args, **kwargs):
+        return self.ddb_relation.filter(*args, **kwargs)
+        
+    
+    @property
+    def pa_dataset(self, **kwargs):
+        if not hasattr(self, "_pa_dataset") or len(kwargs) > 0:
+            self._load_dataset(**kwargs)
+
+        return self._pa_dataset
+
+    @property
+    def pa_table(self, **kwargs):
+        
+        if not hasattr(self, "_pa_table") or len(kwargs) > 0:
+            name = kwargs.get("name", "temp_table")
+            if name in self.execute("SHOW TABLES").df()["name"].tolist():
+                self._pa_table = self.query(f"SELECT * FROM {name}").arrow()
+            else:
+                self._load_table(**kwargs)
+
+        return self._pa_table
+    
+    @property
+    def ddb_relation(self, **kwargs):
+        name = kwargs.get("name", "temp_table")
+        if name in self.execute("SHOW TABLES").df()["name"].tolist():
+            return self.query(f"SELECT * FROM {name}")
+        
+        elif hasattr(self, "_pa_table"):
+            return self.ddb.from_arrow(self._pa_table)
+        else:
+            if not hasattr(self, "_pa_dataset") or len(kwargs)>0:
+                self._load_dataset(**kwargs)
+                
+            return self.ddb.from_arrow(self._pa_dataset)
+        
+    @property
+    def pl_dataframe(self, **kwargs):
+        return pl.from_arrow(self.pa_table(**kwargs))
+            
+        
+
+       
+    
+    
+    
+class Writer:
+    
 
     def _gen_path(
         self,
@@ -147,27 +223,27 @@ class Dataset:
         use_temp_table: bool,
     ):
         if isinstance(table, pa.Table):
-            table_ = self._db.from_arrow(table)
+            table_ = self.ddb.from_arrow(table)
         elif isinstance(table, ds.Dataset):
             _table = table
-            table_ = self._db.query("SELECT * FROM _table")
+            table_ = self.query("SELECT * FROM _table")
         elif isinstance(table, pd.DataFrame):
-            table_ = self._db.from_df(table)
+            table_ = self.ddb.from_df(table)
         elif isinstance(table, pl.DataFrame):
-            table_ = self._db.from_arrow(table.to_arrow())
+            table_ = self.ddb.from_arrow(table.to_arrow())
         elif isinstance(table, str):
             if ".parquet" in table:
-                table_ = self._db.from_parquet(table)
+                table_ = self.ddb.from_parquet(table)
             else:
-                table_ = self._db.query(f"SELECT * FROM '{table}'")
+                table_ = self.query(f"SELECT * FROM '{table}'")
         else:
             table_ = table
 
         if use_temp_table:
-            self._db.execute(
+            self.execute(
                 "CREATE OR REPLACE TEMP TABLE temp_table AS SELECT * FOM table_"
             )
-            table_ = self._db.query("SELECT * FROM temp_table")
+            table_ = self.query("SELECT * FROM temp_table")
 
         return table_
     
@@ -178,13 +254,11 @@ class Dataset:
         | pl.DataFrame
         | str, name:str="temp_table"):
         
-        self._db.execute(
+        self.execute(
                 "CREATE OR REPLACE TEMP TABLE temp_table AS SELECT * FOM table_"
             )
-            table_ = self._db.query(f"SELECT * FROM {name}")
+            table_ = self.query(f"SELECT * FROM {name}")
         
-    
-    
 
     def write_dataset(
         self,
@@ -245,7 +319,7 @@ class Dataset:
             self.write_table(table=table_.arrow(), path=path_, **kwargs)
 
         if use_temp_table:
-            self._db.execute("DROP TABLE temp_table")
+            self.execute("DROP TABLE temp_table")
 
     def append(
         self,
@@ -273,16 +347,4 @@ class Dataset:
             **kwargs,
         )
 
-    @property
-    def dataset(self, **kwargs):
-        if not hasattr(self, "_ds") or len(kwargs) > 0:
-            self._load_dataset(**kwargs)
 
-        return self._ds
-
-    @property
-    def table(self, **kwargs):
-        if not hasattr(self, "_table") or len(kwargs) > 0:
-            self._load_table(**kwargs)
-
-        return self._table
