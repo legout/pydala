@@ -136,12 +136,16 @@ class Dataset:
                 **kwargs,
             )
 
-    def _to_duckdbrelation(self, table:duckdb.DuckDBPyRelation
+    def _to_duckdbrelation(
+        self,
+        table: duckdb.DuckDBPyRelation
         | pa.Table
         | ds.Dataset
         | pd.DataFrame
         | pl.DataFrame
-        | str, use_temp_table:bool):
+        | str,
+        use_temp_table: bool,
+    ):
         if isinstance(table, pa.Table):
             table_ = self._db.from_arrow(table)
         elif isinstance(table, ds.Dataset):
@@ -164,9 +168,24 @@ class Dataset:
                 "CREATE OR REPLACE TEMP TABLE temp_table AS SELECT * FOM table_"
             )
             table_ = self._db.query("SELECT * FROM temp_table")
-            
+
         return table_
     
+    def temp_table(self, table_: duckdb.DuckDBPyRelation
+        | pa.Table
+        | ds.Dataset
+        | pd.DataFrame
+        | pl.DataFrame
+        | str, name:str="temp_table"):
+        
+        self._db.execute(
+                "CREATE OR REPLACE TEMP TABLE temp_table AS SELECT * FOM table_"
+            )
+            table_ = self._db.query(f"SELECT * FROM {name}")
+        
+    
+    
+
     def write_dataset(
         self,
         table: duckdb.DuckDBPyRelation
@@ -243,6 +262,7 @@ class Dataset:
         **kwargs,
     ):
         
+
         self.write_dataset(
             table=table,
             path=None,
