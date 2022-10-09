@@ -12,6 +12,7 @@ duckdb = "^0.5.0"
 pyarrow = "^9.0.0"
 pandas = "^1.4.4"
 pathlib = "^1.0.1"
+polars = "^0.14.18"
 
 
 [build-system]
