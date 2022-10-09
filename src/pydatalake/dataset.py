@@ -17,16 +17,38 @@ class Reader:
         path: str,
         partitioning: ds.Partitioning | list[str] | str | None = None,
         filesystem: fs.FileSystem | None = None,
-        format: str | None = None,
+        format: str | None = "parquet",
+        ddb: duckdb.DuckDBPyConnection | None = None,
     ):
         self._path = path
         self._filesystem = filesystem
         self._format = format
         self._partitioning = partitioning
-        self.ddb = duckdb.connect()
-        self.execute("SET temp_directory='/tmp/duckdb/'")
+        self.ddb = ddb
+        if self.ddb is not None:
+            self.ddb.execute("SET temp_directory='/tmp/duckdb/'")
 
-    def _load_dataset(self, name: str = "pa_dataset", **kwargs):
+    @property
+    def _path_exists(self) -> bool:
+        if self._filesystem is not None:
+            if hasattr(self._filesystem, "exists"):
+                return self._filesystem.exists(self._path)
+            else:
+                return self._filesystem.get_file_info(self._path).type > 0
+        else:
+            return Path(self._path).exists()
+
+    @property
+    def _is_file(self) -> bool:
+        if self._filesystem is not None:
+            if hasattr(self._filesystem, "isfile"):
+                return self._filesystem.isfile(self._path)
+            else:
+                return self._filesystem.get_file_info(self._path).type == 2
+        else:
+            return Path(self._path).is_file()
+
+    def load_dataset(self, name="pa_dataset", **kwargs):
 
         self._pa_dataset = ds.dataset(
             source=self._path,
@@ -35,9 +57,11 @@ class Reader:
             partitioning=self._partitioning,
             **kwargs,
         )
-        self.ddb.register(name, self._pa_dataset)
+        if self.ddb is not None:
+            self._pa_dataset_name = name
+            self.ddb.register(name, self._pa_dataset)
 
-    def _load_table(self, name: str = "pa_table", **kwargs):
+    def load_table(self, name="pa_table", **kwargs):
         if self._format == "parquet":
             self._pa_table = pq.read_table(
                 self._path,
@@ -47,95 +71,90 @@ class Reader:
             )
 
         else:
-            if self._filesystem is not None:
-                if hasattr(self._filesystem, "isfile"):
-                    if self._filesystem.isfile(self._path):
+            if self._is_file:
+                if self._filesystem is not None:
+                    if hasattr(self._filesystem, "open"):
                         with self._filesystem.open(self._path) as f:
                             self._pa_table = pf.read_feather(f, **kwargs)
                     else:
-                        if not hasattr(self, "_ds"):
-                            self._load_dataset()
-                        self._pa_table = self._pa_dataset.to_table(**kwargs)
-                else:
-                    if self._filesystem.get_file_info(self._path).is_file:
                         with self._filesystem.open_input_file(self._path) as f:
                             self._pa_table = pf.read_feather(f, **kwargs)
-                    else:
-                        if not hasattr(self, "_ds"):
-                            self._load_dataset()
-
-                        self._pa_table = self._pa_dataset.to_table(**kwargs)
-
-            else:
-                if Path(self._path).is_file():
-                    self._pa_table = pf.read_feather(self._path, **kwargs)
                 else:
-                    if not hasattr(self, "_ds"):
-                        self._load_dataset()
+                    self._pa_table = pf.read_feather(self._path, **kwargs)
+            else:
+                if not hasattr(self, "_pa_dataset"):
+                    self.load_dataset()
+                self._pa_table = self._pa_dataset.to_table(**kwargs)
 
-                    self._pa_table = self._pa_dataset.to_table(**kwargs)
+        if self.ddb is not None:
+            self._pa_table_name = name
+            self.ddb.register(name, self._pa_table)
 
-        self.ddb.register(name, self._pa_table)
-
-    def create_temp_table(self, name: str = "temp_table", **kwargs):
-        if hasattr(self, "_pa_table"):
-            self.execute(
-                f"CREATE OR REPLACE TEMP TABLE {name} AS SELECT * FROM pa_table"
-            )
-
-        else:
-            if not hasattr(self, "_pa_dataset"):
-                self._load_dataset(**kwargs)
-
-            self.execute(
-                f"CREATE OR REPLACE TEMP TABLE {name} AS SELECT * FROM pa_dataset"
-            )
-
-    def query(self, *args, **kwargs):
-        return self.ddb.query(*args, **kwargs)
-
-    def execute(self, *args, **kwargs):
-        return self.ddb.execute(*args, **kwargs)
-
-    def filter(self, *args, **kwargs):
-        return self.ddb_relation.filter(*args, **kwargs)
+    def _create_temp_table(self, name: str = "temp_table"):
+        if self.ddb is not None:
+            if hasattr(self, "_pa_table"):
+                self.ddb.execute(
+                    f"CREATE OR REPLACE TEMP TABLE {name} AS SELECT * FROM {self._pa_table_name}"
+                )
+            elif hasattr(self, "_pa_dataset"):
+                self.ddb.execute(
+                    f"CREATE OR REPLACE TEMP TABLE {name} AS SELECT * FROM {self._pa_dataset_name}"
+                )
 
     @property
-    def pa_dataset(self, **kwargs):
-        if not hasattr(self, "_pa_dataset") or len(kwargs) > 0:
-            self._load_dataset(**kwargs)
+    def pa_dataset(self) -> ds.FileSystemDataset:
+        if not hasattr(self, "_pa_dataset"):
+            self.load_dataset()
 
         return self._pa_dataset
 
     @property
-    def pa_table(self, **kwargs):
-
-        if not hasattr(self, "_pa_table") or len(kwargs) > 0:
-            name = kwargs.get("name", "temp_table")
-            if name in self.execute("SHOW TABLES").df()["name"].tolist():
-                self._pa_table = self.query(f"SELECT * FROM {name}").arrow()
+    def dataset(self) -> ds.FileSystemDataset:
+        return self.pa_dataset
+    
+    @property
+    def pa_table(self) -> pa.Table:
+        if not hasattr(self, "_pa_table"):
+            if self.ddb is not None:
+                if "temp_table" in self.ddb.execute("SHOW TABLES").df()["name"].tolist():
+                    self._pa_table = self.query(f"SELECT * FROM temp_table").arrow()
+                else:
+                    self.load_table()
             else:
-                self._load_table(**kwargs)
+                self.load_table()
 
         return self._pa_table
 
     @property
-    def ddb_relation(self, **kwargs):
-        name = kwargs.get("name", "temp_table")
-        if name in self.execute("SHOW TABLES").df()["name"].tolist():
-            return self.query(f"SELECT * FROM {name}")
+    def table(self) -> duckdb.DuckDBPyRelation:
+        if self.ddb is not None:
 
-        elif hasattr(self, "_pa_table"):
-            return self.ddb.from_arrow(self._pa_table)
-        else:
-            if not hasattr(self, "_pa_dataset") or len(kwargs) > 0:
-                self._load_dataset(**kwargs)
+            if "temp_table" in self.ddb.execute("SHOW TABLES").df()["name"].tolist():
+                self._table = self.ddb.query(f"SELECT * FROM temp_table")
 
-            return self.ddb.from_arrow(self._pa_dataset)
+            elif hasattr(self, "_pa_table"):
+                self._table = self.ddb.from_arrow(self._pa_table)
+
+            elif hasattr(self, "_pa_dataset"):
+                self._table = self.ddb.from_arrow(self._pa_dataset)
+                
+            else:
+                self.load_dataset()
+                self._table = self.ddb.from_arrow(self._pa_dataset)
+
+            return self._table
 
     @property
-    def pl_dataframe(self, **kwargs):
-        return pl.from_arrow(self.pa_table(**kwargs))
+    def pl_dataframe(self) -> pl.DataFrame:
+        if not hasattr(self, "_pl_dataframe"):
+            self._pl_dataframe = pl.from_arrow(self.pa_table)
+        return self._pl_dataframe
+
+    @property
+    def pd_dataframe(self) -> pd.DataFrame:
+        if not hasattr(self, "_pd_dataframe"):
+            self._pd_dataframe = self.table.df()
+        return self._pd_dataframe
 
 
 class Writer:
@@ -144,22 +163,24 @@ class Writer:
         path: str,
         base_name: str = "data",
         partitioning: ds.Partitioning | list[str] | str | None = None,
-        with_time_partition: bool = False,
         filesystem: fs.FileSystem | None = None,
         format: str | None = "parquet",
         compression: str | None = "zstd",
+        ddb: duckdb.DuckDBPyConnection | None = None,
     ):
+        # self._table = table
         self._path = path
         self._base_name = base_name
         self._partitioning = partitioning
-        self._with_time_partition = with_time_partition
         self._filesystem = filesystem
         self._format = format
         self._compression = compression
+        self.ddb = ddb
+        if ddb is not None:
+            self.ddb.execute("SET temp_directory='/tmp/duckdb/'")
 
     def _gen_path(
-        self,
-        partition_names: tuple | None = None,
+        self, partition_names: tuple | None = None, with_time_partition: bool = False
     ):
 
         parts = [self._path]
@@ -167,61 +188,17 @@ class Writer:
         if partition_names is not None:
             parts.extend(partition_names)
 
-        if self._with_time_partition:
+        if with_time_partition:
             parts.append(str(dt.datetime.today()))
 
-        parts.append(self._base_name)# + f"-{uuid.uuid4().hex}.{self._format}")
+        parts.append(self._base_name)  # + f"-{uuid.uuid4().hex}.{self._format}")
 
-        path_ = Path(*parts)
+        path = Path(*parts)
 
         if self._filesystem is None:
-            path_.mkdir.parents(exist_ok=True, parents=True)
+            path.mkdir.parents(exist_ok=True, parents=True)
 
         return path
-
-    def _to_duckdbrelation(
-        self,
-        table: duckdb.DuckDBPyRelation
-        | pa.Table
-        | ds.Dataset
-        | pd.DataFrame
-        | pl.DataFrame
-        | str,
-        # set_temp_table: bool=False,
-    ):
-        if isinstance(table, pa.Table):
-            table_ = self.ddb.from_arrow(table)
-        elif isinstance(table, ds.Dataset):
-            _table = table
-            table_ = self.query("SELECT * FROM _table")
-        elif isinstance(table, pd.DataFrame):
-            table_ = self.ddb.from_df(table)
-        elif isinstance(table, pl.DataFrame):
-            table_ = self.ddb.from_arrow(table.to_arrow())
-        elif isinstance(table, str):
-            if ".parquet" in table:
-                table_ = self.ddb.from_parquet(table)
-            elif ".csv" in table:
-                table_ = self.ddb.from_csv_auto(table)
-            else:
-                table_ = self.query(f"SELECT * FROM '{table}'")
-        else:
-            table_ = table
-
-        return table_
-
-    def _make_temp_table(
-        self,
-        table: duckdb.DuckDBPyRelation
-        | pa.Table
-        | ds.Dataset
-        | pd.DataFrame
-        | pl.DataFrame
-        | str,
-        name: str = "temp_table",
-    ):
-        table_ = self._to_duckdbrelation(table, use_temp_table=False)
-        self.execute(f"CREATE OR REPLACE TEMP TABLE {name} AS SELECT * FROM table_")
 
     def write_table(
         self,
@@ -237,19 +214,19 @@ class Writer:
             .replace("arrow", "feather")
             .replace("ipc", "feather")
         )
-        if isinstance(Path, str):
+        if isinstance(path, str):
             path = Path(path)
 
         if path.suffix == "":
-            path = path / self._base_name + f"-{uuid.uuid4().hex}.{self._format}"
+            path = path / (self._base_name + f"-{uuid.uuid4().hex}.{self._format}")
 
         if format == "feather":
             if filesystem is not None:
                 if hasattr(filesystem, "open"):
-                    with filesystem.open(path) as f:
+                    with filesystem.open(str(path)) as f:
                         pf.write_feather(table, f, compression=compression, **kwargs)
                 else:
-                    with filesystem.open_output_stream(path) as f:
+                    with filesystem.open_output_stream(str(path)) as f:
                         pf.write_feather(table, f, compression=compression, **kwargs)
 
             else:
@@ -270,28 +247,17 @@ class Writer:
 
     def write_dataset(
         self,
-        table: duckdb.DuckDBPyRelation
-        | pa.Table
-        | ds.Dataset
-        | pd.DataFrame
-        | pl.DataFrame
-        | str,
+        table: duckdb.DuckDBPyRelation,
         path: str | None = None,
         partitioning: list | str | None = None,
         with_time_partition: bool = False,
         n_rows: int | None = None,
-        with_temp_table: bool = True,
         **kwargs,
     ):
-        
-            
+
         format = kwargs.get("format", self._format)
         compression = kwargs.get("compression", self._compression)
-        
-        table_ = self._to_duckdbrelation(table=table)
-        if with_temp_table:
-            self._make_temp_table(table_)
-            
+
         if partitioning is not None:
             if isinstance(repartitioning, str):
                 partitioning = [partitioning]
@@ -299,12 +265,13 @@ class Writer:
             partitioning = self._partitioning
 
         if partitioning is not None:
-            partitions = table_.project(",".join(partitioning)).distinct().fetchall()
+            partitions = table.project(",".join(partitioning)).distinct().fetchall()
 
             for partition_names in partitions:
                 path_ = self._gen_path(
                     path=path,
                     partition_names=partition_names,
+                    with_time_partition=with_time_partition,
                 )
 
                 filter_ = []
@@ -312,7 +279,7 @@ class Writer:
                     filter_.append(f"{p[0]}='{p[1]}'")
                 filter_ = " AND ".join(filter_)
 
-                table_part = table_.filter(filter_)
+                table_part = table.filter(filter_)
 
                 if n_rows is None:
                     self.write_table(
@@ -333,10 +300,207 @@ class Writer:
                         )
 
         else:
-            path_ = self._gen_path(
-                path=path, partition_names=None
-            )
-            self.write_table(table=table_.arrow(), path=path_, **kwargs)
+            path_ = self._gen_path(partition_names=None, with_time_partition=False)
+            self.write_table(table=table.arrow(), path=path_, **kwargs)
 
-        if with_temp_table:
-            self.execute("DROP TABLE temp_table")
+
+class Dataset:
+    def __init__(
+        self,
+        path: str,
+        base_name: str = "data",
+        partitioning: ds.Partitioning | list[str] | str | None = None,
+        filesystem: dict | fs.FileSystem | None = None,
+        format: str | None = "parquet",
+    ):
+        self._path = path
+        self._base_name = base_name
+        self._filesystem = filesystem
+        self._format = format
+        self._partitioning = partitioning
+        self.ddb = duckdb.connect()
+        self.ddb.execute("SET temp_directory='/tmp/duckdb/'")
+        self._set_reader()
+        self._set_writer()
+
+    def _set_reader(self):
+        self.reader = Reader(
+            path=self._path,
+            partitioning=self._partitioning,
+            filesystem=self._filesystem["reader"]
+            if isinstance(self._filesystem, dict)
+            else self._filesystem,
+            format=self._format,
+            ddb=self.ddb,
+        )
+
+    def _set_writer(
+        self,
+    ):
+        self.writer = Writer(
+            path=self._path,
+            base_name=self._base_name,
+            partitioning=self._partitioning,
+            filesystem=elf._filesystem["writer"]
+            if isinstance(self._filesystem, dict)
+            else self._filesystem,
+            format=self._format,
+            ddb=self.ddb,
+        )
+
+    def _to_ddb_relation(
+        self,
+        table: duckdb.DuckDBPyRelation
+        | pa.Table
+        | ds.FileSystemDataset
+        | pd.DataFrame
+        | pl.DataFrame
+        | str,
+        name="table_",
+    ):
+
+        if isinstance(table, pa.Table) or isinstance(table, ds.FileSystemDataset):
+            table_ = self.ddb.from_arrow(table)
+        elif isinstance(table, pd.DataFrame):
+            table_ = self.ddb.from_df(table)
+        elif isinstance(table, pl.DataFrame):
+            table_ = self.ddb.from_arrow(table.to_arrow())
+        elif isinstance(table, str):
+            if ".parquet" in table:
+                table_ = self.ddb.from_parquet(table)
+            elif ".csv" in table:
+                table_ = self.ddb.from_csv_auto(table)
+            else:
+                table_ = self.query(f"SELECT * FROM '{table}'")
+        else:
+            table_ = table
+
+        table_.create_view(name)
+
+        return table_
+
+    def add_table(
+        self,
+        table: duckdb.DuckDBPyRelation
+        | pa.Table
+        | ds.FileSystemDataset
+        | pd.DataFrame
+        | pl.DataFrame
+        | str,
+        name: str = "table_",
+    ):
+        self._table = self._to_ddb_relation(table, name=name)
+
+    def query(self, *args, **kwargs) -> duckdb.DuckDBPyRelation:
+        return self.ddb.query(*args, **kwargs)
+
+    def execute(self, *args, **kwargs) -> duckdb.DuckDBPyResult:
+        return self.ddb.execute(*args, **kwargs)
+
+    def filter(self, *args, **kwargs) -> duckdb.DuckDBPyRelation:
+        return self.table.filter(*args, **kwargs)
+
+    def write_table(
+        self,
+        table: duckdb.DuckDBPyRelation
+        | pa.Table
+        | ds.FileSystemDataset
+        | pd.DataFrame
+        | pl.DataFrame
+        | str
+        | None = None,
+        path: str | None = None,
+        **kwargs,
+    ):
+        if table is not None:
+            self.add_table(table)
+
+        self._path = self._path if path is None else path
+        self._partitioning = None
+        self._set_writer()
+        self.writer.write_table(table=self.pa_table, path=self._path, **kwargs)
+
+    def write_dataset(
+        self,
+        table: duckdb.DuckDBPyRelation | None = None,
+        path: str | None = None,
+        partitioning: list | str | None = None,
+        with_time_partition: bool = False,
+        n_rows: int | None = None,
+        **kwargs,
+    ):
+        if table is not None:
+            self.add_table(table)
+
+        self._path = path if path is None else self._path
+        self._partitioning = (
+            partitioning if partitioning is not None else self._partitioning
+        )
+        self._set_writer()
+
+        self.writer.write_dataset(
+            table=self.table,
+            with_time_partition=with_time_partition,
+            n_rows=n_rows,
+            **kwargs,
+        )
+
+    @property
+    def pa_dataset(self) -> ds.FileSystemDataset:
+        if hasattr(self, "_pa_dataset"):
+            return self._pa_dataset
+        else:
+            if self.reader._path_exists:
+                self._pa_dataset = self.reader.pa_dataset
+                return self._pa_dataset
+
+    @property
+    def dataset(self) -> ds.FileSystemDataset:
+        if hasattr(self, "_pa_dataset"):
+            return self._pa_dataset
+        else:
+            if self.reader._path_exists:
+                return self.pa_dataset
+
+    @property
+    def pa_table(self) -> pa.Table:
+        if hasattr(self, "_pa_table"):
+            return self._pa_table
+        elif hasattr(self, "_table"):
+            self._pa_table = self._table.arrow()
+            return self._pa_table
+        else:
+            if self.reader._path_exists:
+                self._pa_table = self.reader.pa_table
+                return self._pa_table
+
+    @property
+    def table(self) -> duckdb.DuckDBPyRelation:
+        if hasattr(self, "_table"):
+            return self._table
+        else:
+            if self.reader._path_exists:
+                self._table = self.reader.table
+                return self._table
+
+    @property
+    def pl_dataframe(self) -> pl.DataFrame:
+        if hasattr(self, "_pl_dataframe"):
+            return self._pl_dataframe
+        elif hasattr(self, "_pa_table"):
+            self._pl_dataframe = pl.from_arrow(self._pa_table)
+            return self._pl_dataframe
+        else:
+            if self.reader._path_exists:
+                return self.reader.pl_dataframe
+
+    @property
+    def pd_dataframe(self) -> pd.DataFrame:
+        if hasattr(self, "_pd_dataframe"):
+            return self._pd_dataframe
+        elif hasattr(self, "_table"):
+            self._pd_dataframe = self._table.df()
+            return self._pd_dataframe
+        else:
+            if self.reader._path_exists:
+                return self.reader.pd_dataframe
