@@ -111,12 +111,15 @@ class Reader:
     @property
     def dataset(self) -> ds.FileSystemDataset:
         return self.pa_dataset
-    
+
     @property
     def pa_table(self) -> pa.Table:
         if not hasattr(self, "_pa_table"):
             if self.ddb is not None:
-                if "temp_table" in self.ddb.execute("SHOW TABLES").df()["name"].tolist():
+                if (
+                    "temp_table"
+                    in self.ddb.execute("SHOW TABLES").df()["name"].tolist()
+                ):
                     self._pa_table = self.query(f"SELECT * FROM temp_table").arrow()
                 else:
                     self.load_table()
@@ -137,7 +140,7 @@ class Reader:
 
             elif hasattr(self, "_pa_dataset"):
                 self._table = self.ddb.from_arrow(self._pa_dataset)
-                
+
             else:
                 self.load_dataset()
                 self._table = self.ddb.from_arrow(self._pa_dataset)
@@ -171,7 +174,9 @@ class Writer:
         # self._table = table
         self._path = path
         self._base_name = base_name
-        self._partitioning = partitioning
+        self._partitioning = (
+            [partitioning] if isinstance(partitioning, str) else partitioning
+        )
         self._filesystem = filesystem
         self._format = format
         self._compression = compression
@@ -182,8 +187,11 @@ class Writer:
     def _gen_path(
         self, partition_names: tuple | None = None, with_time_partition: bool = False
     ):
-
-        parts = [self._path]
+        path = Path(self._path)
+        if path.suffix != "":
+            parts = [path.parent]
+        else:
+            parts = [path]
 
         if partition_names is not None:
             parts.extend(partition_names)
@@ -191,12 +199,15 @@ class Writer:
         if with_time_partition:
             parts.append(str(dt.datetime.today()))
 
-        parts.append(self._base_name)  # + f"-{uuid.uuid4().hex}.{self._format}")
+        if path.suffix == "":
+            parts.append(self._base_name + f"-{uuid.uuid4().hex}.{self._format}")
+        else:
+            parts.append(path.suffix)
 
         path = Path(*parts)
 
         if self._filesystem is None:
-            path.mkdir.parents(exist_ok=True, parents=True)
+            path.mkdir.parent(exist_ok=True, parents=True)
 
         return path
 
@@ -207,18 +218,13 @@ class Writer:
         **kwargs,
     ):
 
-        filesystem = kwargs.get("filesystem", self._filesystem)
-        compression = kwargs.get("compression", self._compression)
+        filesystem = kwargs.pop("filesystem", self._filesystem)
+        compression = kwargs.pop("compression", self._compression)
         format = (
-            kwargs.get("format", self._format)
+            kwargs.pop("format", self._format)
             .replace("arrow", "feather")
             .replace("ipc", "feather")
         )
-        if isinstance(path, str):
-            path = Path(path)
-
-        if path.suffix == "":
-            path = path / (self._base_name + f"-{uuid.uuid4().hex}.{self._format}")
 
         if format == "feather":
             if filesystem is not None:
@@ -255,11 +261,12 @@ class Writer:
         **kwargs,
     ):
 
-        format = kwargs.get("format", self._format)
-        compression = kwargs.get("compression", self._compression)
+        format = kwargs.pop("format", self._format)
+        compression = kwargs.pop("compression", self._compression)
+        self._path = path if path is not None else self._path
 
         if partitioning is not None:
-            if isinstance(repartitioning, str):
+            if isinstance(partitioning, str):
                 partitioning = [partitioning]
         else:
             partitioning = self._partitioning
@@ -268,11 +275,6 @@ class Writer:
             partitions = table.project(",".join(partitioning)).distinct().fetchall()
 
             for partition_names in partitions:
-                path_ = self._gen_path(
-                    path=path,
-                    partition_names=partition_names,
-                    with_time_partition=with_time_partition,
-                )
 
                 filter_ = []
                 for p in zip(partitioning, partition_names):
@@ -282,9 +284,13 @@ class Writer:
                 table_part = table.filter(filter_)
 
                 if n_rows is None:
+
                     self.write_table(
                         table=table_part.arrow(),
-                        path=path_,
+                        path=self._gen_path(
+                            partition_names=partition_names,
+                            with_time_partition=with_time_partition,
+                        ),
                         format=format,
                         compression=compression,
                         **kwargs,
@@ -293,7 +299,10 @@ class Writer:
                     for i in range(table_part.shape[0] // n_rows + 1):
                         self.write_table(
                             table=table_part.limit(n_rows, offset=i * n_rows).arrow(),
-                            path=path_,
+                            path=self._gen_path(
+                                partition_names=partition_names,
+                                with_time_partition=with_time_partition,
+                            ),
                             format=format,
                             compression=compression,
                             **kwargs,
@@ -312,12 +321,14 @@ class Dataset:
         partitioning: ds.Partitioning | list[str] | str | None = None,
         filesystem: dict | fs.FileSystem | None = None,
         format: str | None = "parquet",
+        compression: str = "zstd",
     ):
         self._path = path
         self._base_name = base_name
         self._filesystem = filesystem
         self._format = format
         self._partitioning = partitioning
+        self._compression = compression
         self.ddb = duckdb.connect()
         self.ddb.execute("SET temp_directory='/tmp/duckdb/'")
         self._set_reader()
@@ -345,6 +356,7 @@ class Dataset:
             if isinstance(self._filesystem, dict)
             else self._filesystem,
             format=self._format,
+            compression=self._compression,
             ddb=self.ddb,
         )
 
@@ -432,7 +444,7 @@ class Dataset:
         if table is not None:
             self.add_table(table)
 
-        self._path = path if path is None else self._path
+        self._path = path if path is not None else self._path
         self._partitioning = (
             partitioning if partitioning is not None else self._partitioning
         )
@@ -504,3 +516,11 @@ class Dataset:
         else:
             if self.reader._path_exists:
                 return self.reader.pd_dataframe
+
+    def repartition(self, n_rows:int|None=100000):
+        self._n_rows = n_rows
+        # ToDo:
+        # Add parameters for:
+        # - sorting table before repartition
+        # - distinct repartition
+        # - write to new path 
