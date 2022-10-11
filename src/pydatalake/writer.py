@@ -1,10 +1,27 @@
+import uuid
+
+import duckdb
+import pandas as pd
+import polars as pl
+import pyarrow as pa
+import pyarrow.dataset as ds
+import pyarrow.feather as pf
+import pyarrow.fs as pafs
+import pyarrow.parquet as pq
+import s3fs
+
+from .utils import open as open_
+from .utils import to_ddb_relation
+from pathlib import Path
+
+
 class Writer:
     def __init__(
         self,
         path: str,
         base_name: str = "data",
         partitioning: ds.Partitioning | list[str] | str | None = None,
-        filesystem: fs.FileSystem | None = None,
+        filesystem: pafs.FileSystem | s3fs.S3FileSystem | None = None,
         format: str | None = "parquet",
         compression: str | None = "zstd",
         sort_by: str | list | None = None,
@@ -26,9 +43,12 @@ class Writer:
         self.ddb.execute("SET temp_directory='/tmp/duckdb/'")
 
     def _gen_path(
-        self, partition_names: tuple | None = None, with_time_partition: bool = False
+        self,
+        path: str,
+        partition_names: tuple | None = None,
+        with_time_partition: bool = False,
     ):
-        path = Path(self._path)
+        path = Path(path)
         if path.suffix != "":
             parts = [path.parent]
         else:
@@ -72,7 +92,7 @@ class Writer:
 
         if format == "feather":
             if filesystem is not None:
-                with open_(str(path), self._filesystem) as f:
+                with open_(str(path), filesystem) as f:
                     pf.write_feather(table, f, compression=compression, **kwargs)
 
                 pf.write_feather(
@@ -110,14 +130,25 @@ class Writer:
         with_time_partition: bool = False,
         **kwargs,
     ):
-        self._path = path if path is not None else self._path
-        format = self._format if format is None else format
-        compression = self._compression if compression is None else compression
-
-        if sort_by is None:
-            sort_by = self._sort_by
+        if path is not None:
+            self._path = path
         else:
+            path = self._path
+
+        if format is not None:
+            self._format = format
+        else:
+            format = self._format
+
+        if compression is not None:
+            self._compression = compression
+        else:
+            compression = self._compression
+
+        if sort_by is not None:
             self._sort_by = sort_by
+        else:
+            sort_by = self._sort_by
 
         table = to_ddb_relation(
             table=table, ddb=self.ddb, sort_by=sort_by, distinct=distinct
@@ -127,7 +158,11 @@ class Writer:
             if isinstance(partitioning, str):
                 partitioning = [partitioning]
         else:
-            partitioning = self._partitioning
+            partitioning = (
+                self._partitioning
+                if isinstance(self._partitioning, list)
+                else [self._partitioning]
+            )
 
         if partitioning is not None:
             partitions = table.project(",".join(partitioning)).distinct().fetchall()
@@ -146,6 +181,7 @@ class Writer:
                     self.write_table(
                         table=table_part.arrow(),
                         path=self._gen_path(
+                            path=path,
                             partition_names=partition_names,
                             with_time_partition=with_time_partition,
                         ),
@@ -161,6 +197,7 @@ class Writer:
                                 rows_per_file, offset=i * rows_per_file
                             ).arrow(),
                             path=self._gen_path(
+                                path=path,
                                 partition_names=partition_names,
                                 with_time_partition=with_time_partition,
                             ),
@@ -176,6 +213,7 @@ class Writer:
                 self.write_table(
                     table=table.arrow(),
                     path=self._gen_path(
+                        path=path,
                         partition_names=None,
                         with_time_partition=with_time_partition,
                     ),
@@ -191,6 +229,7 @@ class Writer:
                             rows_per_file, offset=i * rows_per_file
                         ).arrow(),
                         path=self._gen_path(
+                            path=path,
                             partition_names=None,
                             with_time_partition=with_time_partition,
                         ),

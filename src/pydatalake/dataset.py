@@ -1,23 +1,14 @@
-import datetime as dt
-import uuid
-from distutils import dist
-from pathlib import Path
-
 import duckdb
 import pandas as pd
 import polars as pl
 import pyarrow as pa
 import pyarrow.dataset as ds
-import pyarrow.feather as pf
 import pyarrow.fs as pafs
-import pyarrow.parquet as pq
 import s3fs
 
 from .reader import Reader
-from .utils import is_file
-from .utils import open as open_
-from .utils import path_exists, sort_table, to_ddb_relation
 from .writer import Writer
+from .utils import to_ddb_relation, copy_to_tmp_directory
 
 
 class Dataset:
@@ -71,39 +62,49 @@ class Dataset:
             ddb=self.ddb,
         )
 
-    def load_dataset(self, name="pa_dataset", **kwargs):
-        self.reader.load_dataset(name=name, **kwargs)
+    def set_dataset(self, name: str = "pa_dataset", **kwargs):
+        self.reader.set_dataset(name=name, **kwargs)
 
-    def load_table(self, name="pa_table", sort_by: str | list | None = None, **kwargs):
+    def load_pa_table(
+        self, name: str = "pa_table", sort_by: str | list | None = None, **kwargs
+    ):
         if sort_by is not None:
             self._sort_by = sort_by
         else:
             sort_by = self._sort_by
-        self.reader.load_table(name=name, sort_by=sort_by, **kwargs)
+        self.reader.load_pa_table(name=name, sort_by=sort_by, **kwargs)
 
-    # def set_table(
-    #     self,
-    #     table: duckdb.DuckDBPyRelation
-    #     | pa.Table
-    #     | ds.FileSystemDataset
-    #     | pd.DataFrame
-    #     | pl.DataFrame
-    #     | str,
-    #     sort_by: str | int | None = None,
-    #     distinct:bool=False
-    # ):
-    #     del self._pa_table
-    #     del self._pa_dataset
-    #     self._table = to_ddb_relation(table, ddb=self.ddb, sort_by=sort_by, distinct=distinct)
+    def create_temp_table(
+        self,
+        name: str = "temp_table",
+        sort_by: str | list | None = None,
+        distinct: bool = False,
+    ):
+        if sort_by is not None:
+            self._sort_by = sort_by
+
+        self.reader.create_temp_table(name=name, sort_by=sort_by, distinct=distinct)
+
+    def create_relation(
+        self,
+        create_temp_table: bool = False,
+        sort_by: str | list | None = None,
+        distinct: bool = False,
+    ):
+        if sort_by is not None:
+            self._sort_by = sort_by
+        else:
+            sort_by = self._sort_by
+
+        self.reader.create_relation(
+            create_temp_table=create_temp_table, sort_by=sort_by, distinct=distinct
+        )
 
     def query(self, *args, **kwargs) -> duckdb.DuckDBPyRelation:
         return self.ddb.query(*args, **kwargs)
 
     def execute(self, *args, **kwargs) -> duckdb.DuckDBPyConnection:
         return self.ddb.execute(*args, **kwargs)
-
-    def filter(self, *args, **kwargs) -> duckdb.DuckDBPyRelation:
-        return self.table.filter(*args, **kwargs)
 
     def write_table(
         self,
@@ -127,12 +128,14 @@ class Dataset:
                 table=table, ddb=self.ddb, sort_by=sort_by, distinct=distinct
             ).arrow()
 
-        self._path = self._path if path is None else path
+        if path is None:
+            path = self._path
+
         self._partitioning = None
         self._set_writer()
         self.writer.write_table(
             table=table,
-            path=self._path,
+            path=path,
             compression=compression,
             format=format,
             row_group_size=row_group_size,
@@ -159,6 +162,9 @@ class Dataset:
         with_time_partition: bool = False,
         **kwargs,
     ):
+        if table is None:
+            table = self.table
+
         if sort_by is None:
             sort_by = self._sort_by
         else:
@@ -250,6 +256,10 @@ class Dataset:
             if self.reader._path_exists:
                 return self.reader.pd_dataframe
 
+    @property
+    def has_temp_table(self) -> bool:
+        return "temp_table" in self.ddb.execute("SHOW TABLES").df()["name"].tolist()
+
     def repartition(
         self,
         table: duckdb.DuckDBPyRelation
@@ -273,13 +283,34 @@ class Dataset:
         delete_old_files: bool = False,
         **kwargs,
     ):
-
+        if path is None:
+            use_tmp_directory = True
+            
         if table is None:
             if with_mem_table:
                 table = self.pa_table
+                use_tmp_directory = False
             if with_temp_table:
-                if hasattr(self, "_pa_table"):
+                if not self.has_temp_table:
                     self.reader.create_temp_table(sort_by=sort_by, distinct=distinct)
+                table = self.ddb.query("SELECT * FROM temp_table")
+                use_tmp_directory = False
+
+        else:
+            if use_tmp_directory:
+                tmp_directory = f"/tmp/duckdb/-{uuid.uuid4().hex}"
+                if isinstance(table, str):
+                    copy_to_tmp_directory(
+                        table, f"{tmp_directory}/{table}", filesystem=self._filesystem
+                    )
+                    table = f"{tmp_directory}/{table}"
+                elif isinstance(table, ds.FileSystemDataset):
+                    copy_to_tmp_directory(
+                        table.files, tmp_directory, filesystem=self._filesystem
+                
+                    table = ds.dataset(tmp_directory)
+
+                filesystem = None
 
         if dest is None:
             dest = self._path
