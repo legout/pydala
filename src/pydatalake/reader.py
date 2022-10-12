@@ -5,7 +5,7 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.feather as pf
 import pyarrow.filesystem as pafs
-import pyarrow.paquet as pq
+import pyarrow.parquet as pq
 import s3fs
 
 from .utils import is_file
@@ -159,7 +159,7 @@ class Reader:
             self.create_temp_table(sort_by=sort_by, distinct=distinct)
 
         if self.has_temp_table:
-            self._table = self.ddb.query(f"SELECT * FROM temp_table")
+            self._table = self.ddb.query("SELECT * FROM temp_table")
 
         elif hasattr(self, "_pa_table"):
             if sort_by is not None:
@@ -200,7 +200,7 @@ class Reader:
                     "temp_table"
                     in self.ddb.execute("SHOW TABLES").df()["name"].tolist()
                 ):
-                    self._pa_table = self.ddb.query(f"SELECT * FROM temp_table").arrow()
+                    self._pa_table = self.ddb.query("SELECT * FROM temp_table").arrow()
                 else:
                     self.load_pa_table()
             else:
