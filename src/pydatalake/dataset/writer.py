@@ -1,4 +1,5 @@
 import uuid
+from pathlib import Path
 
 import duckdb
 import pandas as pd
@@ -9,11 +10,9 @@ import pyarrow.feather as pf
 import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 import s3fs
-import datetime as dt
 
-from .utils import open as open_
-from .utils import to_ddb_relation
-from pathlib import Path
+from ..utils import open as open_
+from ..utils import to_ddb_relation
 
 
 class Writer:
@@ -21,11 +20,12 @@ class Writer:
         self,
         path: str,
         base_name: str = "data",
-        partitioning: ds.Partitioning | list[str] | str | None = None,
+        partitioning: ds.Partitioning | list | str | None = None,
         filesystem: pafs.FileSystem | s3fs.S3FileSystem | None = None,
         format: str | None = "parquet",
         compression: str | None = "zstd",
         sort_by: str | list | None = None,
+        ascending: str | list | None = None,
         ddb: duckdb.DuckDBPyConnection | None = None,
     ):
         self._path = path
@@ -94,12 +94,19 @@ class Writer:
         if format == "feather":
             if filesystem is not None:
                 with open_(str(path), filesystem) as f:
-                    pf.write_feather(table, f, compression=compression, **kwargs)
+                    pf.write_feather(
+                        table,
+                        f,
+                        compression=compression,
+                        chunksize=row_group_size,
+                        **kwargs,
+                    )
 
                 pf.write_feather(
                     table,
                     path,
                     compression=compression,
+                    chunksize=row_group_size,
                     **kwargs,
                 )
         else:
@@ -125,6 +132,7 @@ class Writer:
         compression: str | None = None,
         partitioning: list | str | None = None,
         sort_by: str | list | None = None,
+        ascending: bool | list | None = None,
         distinct: bool = False,
         rows_per_file: int | None = None,
         row_group_size: int | None = None,
@@ -133,26 +141,26 @@ class Writer:
     ):
         if path is not None:
             self._path = path
-        else:
-            path = self._path
 
         if format is not None:
             self._format = format
-        else:
-            format = self._format
 
         if compression is not None:
             self._compression = compression
-        else:
-            compression = self._compression
+        e
 
         if sort_by is not None:
             self._sort_by = sort_by
-        else:
-            sort_by = self._sort_by
+
+        if ascending is not None:
+            self._ascending = ascending
 
         table = to_ddb_relation(
-            table=table, ddb=self.ddb, sort_by=sort_by, distinct=distinct
+            table=table,
+            ddb=self.ddb,
+            sort_by=self._sort_by,
+            ascending=self._ascending,
+            distinct=distinct,
         )
 
         if partitioning is not None:
@@ -186,8 +194,8 @@ class Writer:
                             partition_names=partition_names,
                             with_time_partition=with_time_partition,
                         ),
-                        format=format,
-                        compression=compression,
+                        format=self._format,
+                        compression=self._compression,
                         row_group_size=row_group_size,
                         **kwargs,
                     )
@@ -202,8 +210,8 @@ class Writer:
                                 partition_names=partition_names,
                                 with_time_partition=with_time_partition,
                             ),
-                            format=format,
-                            compression=compression,
+                            format=self._format,
+                            compression=self._compression,
                             row_group_size=row_group_size,
                             **kwargs,
                         )

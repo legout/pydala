@@ -8,11 +8,11 @@ packages = [{include = "pydatalake", from = "src"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"
-duckdb = "^0.5.0"
+duckdb = "^0.5.1"
 pyarrow = "^9.0.0"
 pandas = "^1.4.4"
 pathlib = "^1.0.1"
-polars = "^0.14.18"
+polars = "^0.14.19"
 
 
 [build-system]

@@ -43,6 +43,16 @@ def open(path: str, filesystem: fs.FileSystem | s3fs.S3FileSystem):
         return filesystem.open_input_file(path)
 
 
+def delete(path: str, filesystem: fs.FileSystem | s3fs.S3FileSystem | None):
+    if filesystem is None:
+        shutil.rmtree(path)
+    else:
+        if hasattr(filesystem, open):
+            filesystem.delete(path, recursive=True)
+        else:
+            filesystem.delete_dir(path)
+
+
 def copy_to_tmp_directory(
     src: str | list,
     dest: str,
@@ -66,21 +76,34 @@ def copy_to_tmp_directory(
 
 
 def sort_table(
-    table_: pa.Table | pd.DataFrame | pl.DataFrame,
-    sort_by: str | list,
+    table: pa.Table | pd.DataFrame | pl.DataFrame | ddb.DuckDBPyRelation,
+    sort_by: str | list | tuple,
+    ascending: bool | list | tuple | None,
     ddb: duckdb.DuckDBPyConnection,
+    engine: str = "polars",
 ) -> pa.Table | pd.DataFrame | pl.DataFrame:
 
-    if isinstance(table_, pa.Table):
-        if isinstance(sort_by, list):
-            sort_by = ",".join(sort_by)
-        return ddb.execute(f"SELECT * FROM table_ ORDER BY {sort_by}").arrow()
+    if ascending is None:
+        ascending = True
+    if isinstance(ascending, bool):
+        reverse = not ascending
+    else:
+        reverse = [not el for el in ascending]
 
-    elif isinstance(table_, pd.DataFrame):
-        return table_.sort_values(sort_by)
+    if isinstance(table, pa.Table):
 
-    elif isinstance(table_, pl.DataFrame):
-        return table_.sort(sort_by)
+        return pl.from_arrow(table).sort(by=sort_by, reverse=reverse).to_arrow()
+
+    elif isinstance(table, pd.DataFrame):
+        return table.sort(by=sort_by, reverse=reverse).to_arrow()
+
+    elif isinstance(table, pl.DataFrame):
+        return pl.from_pandas(table).sort(by=sort_by, reverse=reverse).to_pandas()
+
+    elif isinstance(table, ddb.DuckDBPyRelation):
+        return ddb.from_arrow(
+            pl.from_arrow(table.arrow()).sort(by=sort_by, reverse=reverse).arrow()
+        )
 
 
 def to_ddb_relation(
@@ -92,6 +115,7 @@ def to_ddb_relation(
     | str,
     ddb: duckdb.DuckDBPyConnection,
     sort_by: str | list | None = None,
+    ascending: bool | list | None = None,
     distinct: bool = False,
 ) -> duckdb.DuckDBPyRelation:
 
@@ -100,31 +124,59 @@ def to_ddb_relation(
 
     if isinstance(table, pa.Table):
         if sort_by is not None:
-            table = sort_table(table_=table, sort_by=sort_by, ddb=ddb)
-        table_ = ddb.from_arrow(table)
+            table = sort_table(
+                table=table, sort_by=sort_by, ascending=ascending, ddb=ddb
+            )
+        table = ddb.from_arrow(table)
+
     elif isinstance(table, ds.FileSystemDataset):
-        table_ = ddb.from_arrow(table)
+        table = ddb.from_arrow(table)
+
+        if sort_by is not None:
+            if ascending is None:
+                ascending = True
+
+            if isinstance(sort_by, list):
+
+                if isinstance(ascending, bool):
+                    ascending = [ascending] * len(sort_by)
+
+                sort_by = [
+                    f"{col} ASC" if asc else f"{col} DESC"
+                    for col, asc in zip(sort_by, ascending)
+                ]
+                sort_by = ",".join(sort_by)
+
+            else:
+                sort_by = sort_by + " ASC" if ascending else col + " DESC"
+
+            table = table.order(sort_by)
+
     elif isinstance(table, pd.DataFrame):
         if sort_by is not None:
-            table = sort_table(table_=table, sort_by=sort_by, ddb=ddb)
-        table_ = ddb.from_df(table)
+            table = sort_table(
+                table=table, sort_by=sort_by, ascending=ascending, ddb=ddb
+            )
+        table = ddb.from_df(table)
+
     elif isinstance(table, pl.DataFrame):
         if sort_by is not None:
-            table = sort_table(table_=table, sort_by=sort_by, ddb=ddb)
-        table_ = ddb.from_arrow(table.to_arrow())
+            table = sort_table(
+                table=table, sort_by=sort_by, ascending=ascending, ddb=ddb
+            )
+        table = ddb.from_arrow(table.to_arrow())
+
     elif isinstance(table, str):
         if ".parquet" in table:
-            table_ = ddb.from_parquet(table)
+            table = ddb.from_parquet(table)
         elif ".csv" in table:
-            table_ = ddb.from_csv_auto(table)
+            table = ddb.from_csv_auto(table)
         else:
-            table_ = ddb.query(f"SELECT * FROM '{table}'")
+            table = ddb.query(f"SELECT * FROM '{table}'")
     else:
-        table_ = table
+        table = table
 
-    if sort_by is not None:
-        table_ = table_.order(sort_by)
     if distinct is not None:
-        table_ = table_.distinct()
+        table = table.distinct()
 
-    return table_
+    return table

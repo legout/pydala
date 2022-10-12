@@ -8,19 +8,20 @@ import pyarrow.filesystem as pafs
 import pyarrow.parquet as pq
 import s3fs
 
-from .utils import is_file
-from .utils import open as open_
-from .utils import path_exists, sort_table, to_ddb_relation
+from ..utils import is_file
+from ..utils import open as open_
+from ..utils import path_exists, sort_table, to_ddb_relation
 
 
 class Reader:
     def __init__(
         self,
         path: str,
-        partitioning: ds.Partitioning | list[str] | str | None = None,
+        partitioning: ds.Partitioning | str | None = None,
         filesystem: pafs.FileSystem | s3fs.S3FileSystem | None = None,
         format: str | None = "parquet",
         sort_by: str | list | None = None,
+        ascending: str | list | None = None,
         ddb: duckdb.DuckDBPyConnection | None = None,
     ):
         self._path = path
@@ -81,20 +82,28 @@ class Reader:
 
         pass
 
-    def _sort_pa_table(self, sort_by: str | list | None = None):
-        if sort_by is not None:
-            if not hasattr(self, "_pa_table"):
-                self.load_pa_table()
-
-            self._pa_table = sort_table(
-                table_=self._pa_table, sort_by=self._sort_by, ddb=self.ddb
-            )
+    def sort(
+        self, which: str, sort_by: str | list, ascending: bool | list | None = None
+    ):
+        table = sort_table(
+            table=self.__getattribute__("_" + which),
+            sort_by=sort_by,
+            ascending=ascending,
+        )
+        self.__setattr__("_" + which, table)
 
     def load_pa_table(
-        self, name: str = "pa_table", sort_by: str | list | None = None, **kwargs
+        self,
+        name: str = "pa_table",
+        sort_by: str | list | None = None,
+        ascending: bool | list | None = None,
+        **kwargs,
     ):
         if sort_by is not None:
             self._sort_by = sort_by
+
+        if ascending is not None:
+            self._ascending = ascending
 
         if self._format == "parquet":
             self._load_parquet(**kwargs)
@@ -110,7 +119,9 @@ class Reader:
             self._load_csv(**kwargs)
 
         if self._sort_by is not None:
-            self._sort_pa_table(sort_by=self._sort_by)
+            self._pa_table = sort_table(
+                self._pa_table, sort_by=self._sort_by, ascending=self._ascending
+            )
 
         self._pa_table_name = name
         self.ddb.register(name, self._pa_table)
@@ -119,6 +130,7 @@ class Reader:
         self,
         name: str = "temp_table",
         sort_by: str | list | None = None,
+        ascending: bool | list | None = None,
         distinct: bool = False,
     ):
 
@@ -134,8 +146,22 @@ class Reader:
         if sort_by is not None:
             self._sort_by = sort_by
 
+            if ascending is None:
+                self._ascending = ascending
+                ascending = True
+
             if isinstance(sort_by, list):
+
+                if isinstance(ascending, bool):
+                    ascending = [ascending] * len(sort_by)
+
+                sort_by = [
+                    f"{col} ASC" if asc else f"{col} DESC"
+                    for col, asc in zip(sort_by, ascending)
+                ]
                 sort_by = ",".join(sort_by)
+            else:
+                sort_by = sort_by + " ASC" if ascending else col + " DESC"
 
             sql += f" ORDER BY {sort_by}"
 
@@ -148,31 +174,40 @@ class Reader:
         self,
         create_temp_table: bool = False,
         sort_by: str | list | None = None,
+        ascending: bool | list | None = None,
         distinct: bool = False,
     ):
         if sort_by is not None:
             self._sort_by = sort_by
-        else:
-            sort_by = self._sort_by
+
+        if ascending is not None:
+            self._ascending = ascending
 
         if create_temp_table:
-            self.create_temp_table(sort_by=sort_by, distinct=distinct)
+            self.create_temp_table(sort_by=self._sort_by, distinct=distinct)
 
         if self.has_temp_table:
             self._table = self.ddb.query("SELECT * FROM temp_table")
 
         elif hasattr(self, "_pa_table"):
-            if sort_by is not None:
-                self._pa_table = self._sort_pa_table(sort_by=sort_by)
+
             self._table = to_ddb_relation(
-                table=self._pa_table, ddb=self.ddb, sort_by=sort_by, distinct=distinct
+                table=self._pa_table,
+                ddb=self.ddb,
+                sort_by=sort_by,
+                ascending=self._ascending,
+                distinct=distinct,
             )
 
         else:
             if not hasattr(self, "_pa_dataset"):
                 self.set_dataset()
             self._table = to_ddb_relation(
-                table=self._pa_dataset, ddb=self.ddb, sort_by=sort_by, distinct=distinct
+                table=self._pa_dataset,
+                ddb=self.ddb,
+                sort_by=sort_by,
+                ascending=self._ascending,
+                distinct=distinct,
             )
 
     def execute(self, *args, **kwargs):
