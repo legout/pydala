@@ -1,11 +1,14 @@
+import shutil
 from pathlib import Path
+
+import duckdb
+import pandas as pd
+import polars as pl
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as fs
-import pandas as pd
-import polars as pl
 import s3fs
-import duckdb
+from joblib import Parallel, delayed
 
 
 def path_exists(
@@ -40,10 +43,26 @@ def open(path: str, filesystem: fs.FileSystem | s3fs.S3FileSystem):
         return filesystem.open_input_file(path)
 
 
-def copy_to_tmp_directory(src:str, dest:str, filesystem:fs.FileSystem | s3fs.S3FileSystem|None=None):
+def copy_to_tmp_directory(
+    src: str | list,
+    dest: str,
+    filesystem: fs.FileSystem | s3fs.S3FileSystem | None = None,
+):
     if filesystem is None:
-        
-
+        src = Path(src)
+        dest = Path(dest)
+        if src.is_file:
+            shutil.copyfile(src=src, dst=dest)
+        else:
+            shutil.copytree(src=src, dst=dest)
+    else:
+        if isinstance(src, str):
+            _ = filesystem.get(src, dest, recursive=True)
+        else:
+            dest = [f"{dest}/{src_}" for src_ in src]
+            _ = Parallel()(
+                delayed(filesystem.get)(src_, dest_) for src_, dest_ in zip(src, dest)
+            )
 
 
 def sort_table(
@@ -64,8 +83,6 @@ def sort_table(
         return table_.sort(sort_by)
 
 
-
-
 def to_ddb_relation(
     table: duckdb.DuckDBPyRelation
     | pa.Table
@@ -75,7 +92,7 @@ def to_ddb_relation(
     | str,
     ddb: duckdb.DuckDBPyConnection,
     sort_by: str | list | None = None,
-    distinct:bool=False
+    distinct: bool = False,
 ) -> duckdb.DuckDBPyRelation:
 
     if isinstance(sort_by, list):
@@ -104,10 +121,10 @@ def to_ddb_relation(
             table_ = ddb.query(f"SELECT * FROM '{table}'")
     else:
         table_ = table
-    
+
     if sort_by is not None:
         table_ = table_.order(sort_by)
     if distinct is not None:
         table_ = table_.distinct()
-    
+
     return table_
