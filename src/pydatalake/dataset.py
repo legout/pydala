@@ -1,4 +1,3 @@
-from distutils import dist
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as fs
@@ -56,7 +55,10 @@ class Reader:
         self._pa_dataset_name = name
         self.ddb.register(name, self._pa_dataset)
 
-    def load_table(self, name="pa_table", sort_by: str | list | None = None, **kwargs):
+    def load_parquet(self, name:str, sort_by: str | list | None = None, **kwargs):
+        
+    
+    def load_table(self, name:str="pa_table", sort_by: str | list | None = None, **kwargs):
         if sort_by is not None:
             self._sort_by = sort_by
 
@@ -654,12 +656,20 @@ class Dataset:
         **kwargs,
     ):
 
+
         if table is None:
             if with_mem_table:
                 table = self.pa_table
             if with_temp_table:
                 if hasattr(self, "_pa_table"):
                     self.reader.create_temp_table(sort_by=sort_by, distinct=distinct)
+        
+        if path is None:
+            if with_mem_table is False and with_temp_table is False:
+                use_tmp_directory=True
+                
+        if use_tmp_directory:
+             
             
                 
 

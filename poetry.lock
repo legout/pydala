@@ -50,7 +50,7 @@ optional = false
 python-versions = ">=3.7"
 
 [package.extras]
-all = ["polars[connectorx,fsspec,matplotlib,numpy,pandas,pyarrow,timezone,xlsx2csv]"]
+all = ["polars"]
 connectorx = ["connectorx"]
 fsspec = ["fsspec"]
 matplotlib = ["matplotlib"]
