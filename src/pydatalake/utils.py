@@ -1,4 +1,5 @@
 from dis import dis
+from shutil import ExecError
 import duckdb
 import pandas as pd
 import polars as pl
@@ -106,15 +107,15 @@ def to_relation(
         return ddb.from_arrow(table)
 
     elif isinstance(table, ds.FileSystemDataset):
-        
+
         table = ddb.from_arrow(table)
-        
+
         if distinct:
             table = table.distinct()
-        
+
         if drop is not None:
             table = drop_columns(table, columns=drop)
-            
+
         if sort_by is not None:
             sort_by = get_ddb_sort_str(sort_by=sort_by, ascending=ascending)
             table = table.order(sort_by)
@@ -122,24 +123,28 @@ def to_relation(
         return table
 
     elif isinstance(table, pd.DataFrame):
-        
+
         if distinct:
             table = distinct_table(table)
 
         if sort_by is not None:
-            table = sort_table(drop_columns(table, columns=drop), sort_by=sort_by, ascending=ascending)
+            table = sort_table(
+                drop_columns(table, columns=drop), sort_by=sort_by, ascending=ascending
+            )
 
-        
         return ddb.from_df(table)
 
     elif isinstance(table, pl.DataFrame):
-        
+
         if distinct:
             table = distinct_table(table)
-            
+
         if sort_by is not None:
             table = sort_table(
-                drop_columns(table, columns=drop), sort_by=sort_by, ascending=ascending, ddb=ddb
+                drop_columns(table, columns=drop),
+                sort_by=sort_by,
+                ascending=ascending,
+                ddb=ddb,
             )
 
         return ddb.from_arrow(table.to_arrow())
@@ -154,14 +159,13 @@ def to_relation(
 
         if distinct:
             table = table.distinct()
-            
+
         if drop is not None:
             table = drop_columns(table, columns=drop)
-            
+
         if sort_by is not None:
             sort_by = get_ddb_sort_str(sort_by=sort_by, ascending=ascending)
             table = table.order(sort_by)
-
 
         return table
 
@@ -217,6 +221,39 @@ def sort_table(
             )
     else:
         return table
+
+def get_tables_diff(
+    table1: pa.Table
+    | pd.DataFrame
+    | pl.DataFrame
+    | duckdb.DuckDBPyRelation
+    | ds.FileSystemDataset|
+    str,
+    table2: pa.Table
+    | pd.DataFrame
+    | pl.DataFrame
+    | duckdb.DuckDBPyRelation
+    | ds.FileSystemDataset|str,
+    ddb: duckdb.DuckDBPyConnection | None = None,
+) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
+
+    if type(table1)!=type(table2):
+        raise TypeError
+    
+    else:
+        if isinstance(table1, pa.Table):
+            return ddb.from_arrow(table1).except_(ddb.from_arrow(table2)).arrow()
+        elif isinstance(table1, pd.DataFrame):
+            return ddb.from_df(table1).except_(ddb.from_df(table2)).df()
+        elif isinstance(table1, pl.DataFrame):
+            return (
+                pl.concat([table1.with_row_count(), table2.with_row_count()])
+                .filter(pl.count().over(table1.columns)==1)
+            )
+        elif isinstance(table1, str):
+            return ddb.execute(f"SELECT * FROM {table1} EXCEPT SELECT * FROM {table2}").arrow()
+            
+            
 
 
 def distinct_table(
@@ -280,7 +317,11 @@ def drop_columns(
             return table.to_table(columns=columns)
 
         elif isinstance(table, duckdb.DuckDBPyRelation):
-            columns = [f"'{col}'" if " " in col else col for col in table.columns if col not in columns]
+            columns = [
+                f"'{col}'" if " " in col else col
+                for col in table.columns
+                if col not in columns
+            ]
             return table.project(",".join(columns))
     else:
         return table

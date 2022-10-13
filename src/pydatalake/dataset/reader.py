@@ -324,7 +324,7 @@ class Reader:
                 self.distinct(distinct)
                 sql = sql.replace("SELECT *", "SELECT DISTINCT *")
 
-            table = self.ddb.execute(sql)
+            table = self.ddb.execute(sql).arrow()
         else:
             table = self._rel
 
@@ -376,12 +376,12 @@ class Reader:
                 self.distinct(distinct)
                 sql = sql.replace("SELECT *", "SELECT DISTINCT *")
 
-            table = self.ddb.execute(sql)
+            table = self.ddb.execute(sql).arrow()
         else:
             table = self._rel
 
         self._pd_dataframe = sort_table(
-            drop_columns(to_polars(table=table), columns=drop),
+            drop_columns(to_pandas(table=table), columns=drop),
             sort_by=self._sort_by,
             ascending=self._ascending,
         )
