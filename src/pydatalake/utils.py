@@ -222,38 +222,39 @@ def sort_table(
     else:
         return table
 
+
 def get_tables_diff(
     table1: pa.Table
     | pd.DataFrame
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
-    | ds.FileSystemDataset|
-    str,
+    | ds.FileSystemDataset
+    | str,
     table2: pa.Table
     | pd.DataFrame
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
-    | ds.FileSystemDataset|str,
+    | ds.FileSystemDataset
+    | str,
     ddb: duckdb.DuckDBPyConnection | None = None,
 ) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
 
-    if type(table1)!=type(table2):
+    if type(table1) != type(table2):
         raise TypeError
-    
+
     else:
         if isinstance(table1, pa.Table):
             return ddb.from_arrow(table1).except_(ddb.from_arrow(table2)).arrow()
         elif isinstance(table1, pd.DataFrame):
             return ddb.from_df(table1).except_(ddb.from_df(table2)).df()
         elif isinstance(table1, pl.DataFrame):
-            return (
-                pl.concat([table1.with_row_count(), table2.with_row_count()])
-                .filter(pl.count().over(table1.columns)==1)
+            return pl.concat([table1.with_row_count(), table2.with_row_count()]).filter(
+                pl.count().over(table1.columns) == 1
             )
         elif isinstance(table1, str):
-            return ddb.execute(f"SELECT * FROM {table1} EXCEPT SELECT * FROM {table2}").arrow()
-            
-            
+            return ddb.execute(
+                f"SELECT * FROM {table1} EXCEPT SELECT * FROM {table2}"
+            ).arrow()
 
 
 def distinct_table(

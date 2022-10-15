@@ -1,5 +1,5 @@
 from importlib.resources import path
-
+import uuid
 import duckdb
 import pandas as pd
 import polars as pl
@@ -10,7 +10,7 @@ import pyarrow.filesystem as pafs
 import pyarrow.parquet as pq
 import s3fs
 
-from ..filesystem import is_file
+from ..filesystem import is_file, copy_to_tmp_directory
 from ..filesystem import open as open_
 from ..filesystem import path_exists
 from ..utils import (
@@ -38,10 +38,14 @@ class Reader:
         distinct: bool | None = None,
         drop: str | list | None = "__index_level_0__",
         ddb: duckdb.DuckDBPyConnection | None = None,
+        tmp_path:str = "/tmp/duckdb",
+        to_local:bool=False
     ):
         self._path = (
             f"{bucket}/{path}".replace("//", "/") if bucket is not None else path
         )
+        self._path_org = self._path
+        self._path_tmp =  f"{tmp_path}/{uuid.uuid4().hex}/{self._path}").replace("//", "/")
         self._bucket = bucket
         self._name = name
         self._filesystem = filesystem
@@ -54,8 +58,10 @@ class Reader:
             self.ddb = ddb
         else:
             self.ddb = duckdb.connect()
-        self.ddb.execute("SET temp_directory='/tmp/duckdb/'")
+        self.ddb.execute(f"SET temp_directory='{tmp_path}'")
         self._tables = dict()
+        self._to_local = to_local
+        self._has_local = False
 
     @property
     def _path_exists(self) -> bool:
@@ -82,22 +88,19 @@ class Reader:
 
     def drop(self, columns: str | list | None):
         self._drop = columns
-
-    def set_dataset(self, name: str = "dataset", **kwargs):
-        name = self._gen_name(name)
-
-        if self._path_exists:
-            self._dataset = ds.dataset(
-                source=self._path,
-                format=self._format,
+        
+    def _download_to_local(self):
+        
+        copy_to_tmp_directory(
+                src=self._path_org,
+                dest=self._path_tmp,
                 filesystem=self._filesystem,
-                partitioning=self._partitioning,
-                **kwargs,
             )
+        
+        self._path = self._path_tmp
+        self._has_local = True
 
-            # self._dataset = name
-            self._tables["dataset"] = name
-            self.ddb.register(name, self._dataset)
+    
 
     def _load_feather(self, **kwargs):
         if self._path_exists:
@@ -124,6 +127,25 @@ class Reader:
     def _load_csv(self, **kwargs):
 
         pass
+    
+    def set_dataset(self, name: str = "dataset", **kwargs):
+        if self._to_local and not self.has_local:
+            self._download_to_local()
+            
+        name = self._gen_name(name)
+
+        if self._path_exists:
+            self._dataset = ds.dataset(
+                source=self._path,
+                format=self._format,
+                filesystem=self._filesystem,
+                partitioning=self._partitioning,
+                **kwargs,
+            )
+
+            # self._dataset = name
+            self._tables["dataset"] = name
+            self.ddb.register(name, self._dataset)
 
     def load_mem_table(
         self,
@@ -134,6 +156,9 @@ class Reader:
         drop: str | list | None = None,
         **kwargs,
     ):
+        if self._to_local and not self.has_local:
+            self._download_to_local()
+            
         name = self._gen_name(name)
 
         if sort_by is not None:
@@ -169,6 +194,7 @@ class Reader:
 
         self._tables["mem_table"] = name
         self.ddb.register(name, self._mem_table)
+                          
 
     def create_temp_table(
         self,
@@ -178,7 +204,9 @@ class Reader:
         distinct: bool = False,
         drop: str | list | None = None,
     ):
-
+        if self._to_local and not self.has_local:
+            self._download_to_local()
+            
         name = self._gen_name(name)
 
         if sort_by is not None:
@@ -236,7 +264,9 @@ class Reader:
         distinct: bool = False,
         drop: str | list | None = None,
     ):
-
+        if self._to_local and not self.has_local:
+            self._download_to_local()
+            
         if sort_by is not None:
             self.sort(by=sort_by, ascending=ascending)
 
@@ -294,6 +324,9 @@ class Reader:
         distinct: bool | None = None,
         drop: str | list | None = None,
     ):
+        if self._to_local and not self.has_local:
+            self._download_to_local()
+            
         self.sort(by=sort_by, ascending=ascending)
         self.drop(drop)
 
@@ -346,6 +379,9 @@ class Reader:
         distinct: bool | None = None,
         drop: str | list | None = None,
     ):
+        if self._to_local and not self.has_local:
+            self._download_to_local()
+            
         self.sort(by=sort_by, ascending=ascending)
         self.drop(drop)
 
@@ -425,6 +461,13 @@ class Reader:
             self.to_relation()
 
         return self._rel
+    
+    @property
+    def table(self) -> duckdb.DuckDBPyRelation:
+        if not self.has_relation:
+            self.to_relation()
+
+        return self._rel
 
     @property
     def pl_dataframe(self) -> pl.DataFrame:
@@ -461,3 +504,7 @@ class Reader:
     @property
     def has_pd_dataframe(self) -> bool:
         return hasattr(self, "_pd_dataframe")
+    
+    @property
+    def has_local(self) -> bool:
+        return self._has_local

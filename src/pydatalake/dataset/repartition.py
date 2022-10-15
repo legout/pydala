@@ -1,3 +1,4 @@
+from re import S
 import duckdb
 import pandas as pd
 import polars as pl
@@ -9,7 +10,8 @@ import uuid
 
 from .reader import Reader
 from .writer import Writer
-from ..filesystem import copy_to_tmp_directory, path_exists, delete
+from ..filesystem import path_exists, delete
+from ..utils import get_tables_diff
 
 
 class Repartition:
@@ -38,19 +40,19 @@ class Repartition:
         with_time_partition: bool = False,
         with_temp_table: bool = False,
         with_mem_table: bool = False,
-        use_tmp_directory: bool = False,
+        to_local: bool = False,
+        tmp_path:str="/tmp/duckdb",
         delete_after: bool = False,
         reader_kwargs: dict | None = None,
         writer_kwargs: dict | None = None,
     ):
         self._src = src
-        self._dest = (dest,)
+        self._dest = dest
         self._bucket = bucket
-        self._base_name = (base_name,)
-        
-        self._set_reader_params(partitioning=partitioning, format=format,  filesystem=filesystem)
-        self._set_writer_params(partitioning=partitioning,filesystem=filesystem,format=format)
-
+        self._base_name = base_name
+        self._partitioning = self._set_reader_writer_params(partitioning)
+        self._format = self._set_reader_writer_params(format)
+        self._filesystem = self._set_reader_writer_params(filesystem)
         self._compression = compression
         self._sort_by = sort_by
         self._ascending = ascending
@@ -62,140 +64,61 @@ class Repartition:
         self._with_time_partition = with_time_partition
         self._with_temp_table = with_temp_table
         self._wit_mem_table = with_mem_table
-        self._use_tmp_directory = use_tmp_directory
+        self._to_local = to_local
         self._delete_after = delete_after
-        
+        self._tmp_path = tmp_path
         self._reader_kwargs = reader_kwargs
         self._writer_kwargs = writer_kwargs
-        
+
         self.ddb = duckdb.connect()
-        self.ddb.execute("SET temp_directory='/tmp/duckdb/'")
+        self.ddb.execute(f"SET temp_directory='{tmp_path}'")
 
-        if src == dest:
-            self._use_tmp_directory = True
-            self._tmp_directory = {"src":(f"/tmp/duckdb/{uuid.uuid4().hex}/" + src).replace(      "//", "/")
-            }
-            self._tmp_directory["dest"] = (f"/tmp/duckdb/{uuid.uuid4().hex}/" + dest).replace(
-                "//", "/")
 
-    def _set_reader_params(self,partitioning: list | str | dict | None = None,
-        format: str | list | tuple | dict | None = "parquet",
-        filesystem: pafs.FileSystem
-        | s3fs.S3FileSystem
-        | list
-        | tuple
-        | dict
-        | None = None,):
-        if isinstance(partitioning, (list, tuple)):
-            self._partitioning_reader = partitioning[0]
-        elif isinstance(partitioning, dict):
-            self._partitioning_reader = partitioning["reader"]
+    def _set_reader_writer_params(value:str|list|tuple|dict):
+        if isinstance(value, dict):
+            return value
+        elif isinstance(value, (list,tuple)):
+            return dict(reader=value[0], writer=value[1])
         else:
-            self._partitioning_reader = partitioning
+            return dict(reader=value, writer=value)
+        
 
-        if isinstance(format, (list, tuple)):
-            self._format_reader = format[0]
-        elif isinstance(partitioning, dict):
-            self._format_reader = format["reader"]
-        else:
-            self._format_reader = format
-
-        if isinstance(filesystem, (list, tuple)):
-            self._filesystem_reader = filesystem[0]
-        elif isinstance(filesystem, dict):
-            self._filesystem_reader = filesystem["reader"]
-        else:
-            self._filesystem_reader = filesystem
-
-    def _set_writer_params(self,partitioning: list | str | dict | None = None,
-        format: str | list | tuple | dict | None = "parquet",
-        filesystem: pafs.FileSystem
-        | s3fs.S3FileSystem
-        | list
-        | tuple
-        | dict
-        | None = None,):
-        if isinstance(partitioning, (list, tuple)):
-            self._partitioning_writer = partitioning[0]
-        elif isinstance(partitioning, dict):
-            self._partitioning_writer = partitioning["writer"]
-        else:
-            self._partitioning_writer = partitioning
-
-        if isinstance(format, (list, tuple)):
-            self._format_writer = format[0]
-        elif isinstance(partitioning, dict):
-            self._format_writer = format["writer"]
-        else:
-            self._format_writer = format
-
-        if isinstance(filesystem, (list, tuple)):
-            self._filesystem_writer = filesystem[0]
-        elif isinstance(filesystem, dict):
-            self._filesystem_writer = filesystem["writer"]
-        else:
-            self._filesystem_writer= filesystem
-    
-    def _load_src(
+    def set_reader(
         self,
-        partitioning: ds.Partitioning | str | None = None,
-        filesystem: pafs.FileSystem | s3fs.S3FileSystem | None = None,
-        format: str | None = "parquet",
-        sort_by: str | list | None = None,
-        ascending: bool | list | None = None,
-        distinct: bool | None = None,
-        drop: str | list | None = "__index_level_0__",
-        **kwargs,
     ):
 
-
-        if partitioning is None:
-            partitioning = self._partitioning_reader
-        if filesystem is  None:
-            filesystem = self._filesystem_reader
-        if format is  None:
-            format = self._format_reader
-            
-        self._set_reader_params(partitioning=partitioning, filesystem=filesystem,format=format)
-        
-        if sort_by is not None:
-            self._sort_by = sort_by
-        if ascending is not None:
-            self._ascending = ascending
-        if distinct is not None:
-            self._distinct = distinct
-        if drop is not None:
-            self._drop = drop
-
-        kwargs.update(self._reader_kwargs)
-
-        if self._use_tmp_directory:
-            src = (
-                f"{self._bucket}/{self._src}".replace("//", "/")
-                if self._bucket is not None
-                else self._src
-            )
-            copy_to_tmp_directory(
-                src=src, dest=self._tmp_directory["src"], filesystem=self._filesystem_reader
-            )
-            path = self._tmp_directory["src"]
-
-        else:
-            path = src
-
         self.src_reader = Reader(
-            path=path,
+            path=self._src,
             bucket=self._bucket,
             name="src",
-            partitioning=self._partitioning_reader,
-            filesystem=self._filesystem_reader,
-            format=self._format_reader,
+            partitioning=self._partitioning["reader"],
+            filesystem=self._filesystem["reader"],
+            format=self._format["reader"],
             sort_by=self._sort_by,
             ascending=self._ascending,
             distinct=self._distinct,
             drop=self._drop,
-            ddb=self.ddb,
+            to_local=self._to_local
+            tmp_path=self._tmp_path
+            ddb=self.ddb            
         )
+        if path_exists(self._dest, self._filesystem["writer"]):
+            
+            self.dest_reader =  Reader(
+                path=self._dest,
+                bucket=self._bucket,
+                name="dest",
+                partitioning=self._partitioning["writer"],
+                filesystem=self._filesystem["writer"],
+                format=self._format["writer"],
+                sort_by=self._sort_by,
+                ascending=self._ascending,
+                distinct=self._distinct,
+                drop=self._drop,
+                to_local=self._to_local
+                tmp_path=self._tmp_path
+                ddb=self.ddb            
+            )
 
         if self._with_temp_table:
             self.src_reader.create_temp_table(
@@ -204,6 +127,11 @@ class Repartition:
                 distinct=self._distinct,
                 drop=self._drop,
             )
+            if hasattr(self, "dest_reader"):
+                self.dest_reader.create_temp_table(sort_by=self._sort_by,
+                    ascending=self._ascending,
+                    distinct=self._distinct,
+                    drop=self._drop,)
 
         if self._with_mem_table:
             self.src_reader.load_mem_table(
@@ -213,96 +141,27 @@ class Repartition:
                 drop=self._drop,
                 **kwargs,
             )
+            if hasattr(self, "dest_reader"):
+                self.dest_reader.load_mem_table(
+                    sort_by=self._sort_by,
+                    ascending=self._ascending,
+                    distinct=self._distinct,
+                    drop=self._drop,
+                    **kwargs,
+                )
+                
+    
+    def distinct(self):
+        if path_exists(self._dest, filesystem=self._filesystem["writer"]):
 
-    def _load_dest(
-        self,
-        partitioning: ds.Partitioning | str | None = None,
-        filesystem: pafs.FileSystem | s3fs.S3FileSystem | None = None,
-        format: str | None = "parquet",
-        sort_by: str | list | None = None,
-        ascending: bool | list | None = None,
-        distinct: bool | None = None,
-        drop: str | list | None = "__index_level_0__",
-        **kwargs,
-    ):
-
-        if partitioning is None:
-            partitioning = self._partitioning_writer
-        if filesystem is  None:
-            filesystem = self._filesystem_writer
-        if format is  None:
-            format = self._format_writer
+            if self._append:
+                
         
-        self._set_reader_params(partitioning=partitioning, filesystem=filesystem,format=format)
-        
-        if sort_by is not None:
-            self._sort_by = sort_by
-        if ascending is not None:
-            self._ascending = ascending
-        if distinct is not None:
-            self._distinct = distinct
-        if drop is not None:
-            self._drop = drop
-
-        kwargs.update(self._writer_kwargs)
-
-        if self._use_tmp_directory:
-            src = (
-                f"{self._bucket}/{self._src}".replace("//", "/")
-                if self._bucket is not None
-                else self._src
-            )
-            copy_to_tmp_directory(
-                src=src, dest=self._tmp_directory["src"], filesystem=self._filesystem_reader
-            )
-            path = self._tmp_directory["src"]
-
-        else:
-            path = src
-
-        self.dest_reader = Reader(
-            path=path,
-            bucket=self._bucket,
-            name="dest",
-            partitioning=self._partitioning_reader,
-            filesystem=self._filesystem_reader,
-            format=self._format_reader,
-            sort_by=self._sort_by,
-            ascending=self._ascending,
-            distinct=self._distinct,
-            drop=self._drop,
-            ddb=self.ddb,
-        )
-
-        if self._with_temp_table:
-            self.dest_reader.create_temp_table(
-                sort_by=self._sort_by,
-                ascending=self._ascending,
-                distinct=self._distinct,
-                drop=self._drop,
-            )
-
-        if self._with_mem_table:
-            self.dest_reader.load_mem_table(
-                sort_by=self._sort_by,
-                ascending=self._ascending,
-                distinct=self._distinct,
-                drop=self._drop,
-                **kwargs,
-            )
-        
-    def setup(self, *args, **kwargs):
-        self._load_src(*args, **kwargs)
-        
-        if self._append:
-            self._load_dest(*args, **kwargs)
+            else:
+                delete(self._dist, filesystem=self._filesystem["writer"])
             
-        else:
-            delete(self._dest, filesystem=self._filesyste_writer)
-            
-            
-        
-        
+                
+
 
 
 # def repartition(
@@ -378,18 +237,18 @@ class Repartition:
 #         self.load_pa_table(sort_by=sort_by, ascending=ascending)
 
 #     if not append:
-#         if path_exists(path=dest, filesystem=filesystem_writer):
+#         if path_exists(path=dest, filesystem=filesystem["writer"]):
 #             delete(path=dest, filesystem=filesystem_reader)
 
 #     else:
 #         if distinct:
-#             reader2 = Reader(name="dest",path=dest, partitioning=partitioning_writer, filesystem=filesystem_writer, format=format_writer, ascending=ascending, ddb=ddb)
+#             reader2 = Reader(name="dest",path=dest, partitioning=partitioning_writer, filesystem=filesystem["writer"], format=format_writer, ascending=ascending, ddb=ddb)
 
 
 #     writer = Writer(
 #         path=dest,
 #         base_name=base_name,
-#         filesystem=filesystem_writer,
+#         filesystem=filesystem["writer"],
 #         partitioning=partitioning_writer,
 #         format=format_writer,
 #         compression=compression,
