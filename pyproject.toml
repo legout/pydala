@@ -15,6 +15,7 @@ polars = "^0.14.18"
 joblib = "^1.2.0"
 s3fs = "^2022.8.2"
 pyarrow = "^9.0.0"
+fsspec = "^2022.8.2"
 
 
 [build-system]

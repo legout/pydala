@@ -38,14 +38,14 @@ class Reader:
         distinct: bool | None = None,
         drop: str | list | None = "__index_level_0__",
         ddb: duckdb.DuckDBPyConnection | None = None,
-        tmp_path:str = "/tmp/duckdb",
-        to_local:bool=False
+        cache_path:str = "/tmp/duckdb",
+        caching:bool=False
     ):
         self._path = (
             f"{bucket}/{path}".replace("//", "/") if bucket is not None else path
         )
         self._path_org = self._path
-        self._path_tmp =  f"{tmp_path}/{uuid.uuid4().hex}/{self._path}").replace("//", "/")
+        self._path_cache =  f"{cache_path}/{uuid.uuid4().hex}/{self._path}").replace("//", "/")
         self._bucket = bucket
         self._name = name
         self._filesystem = filesystem
@@ -58,9 +58,9 @@ class Reader:
             self.ddb = ddb
         else:
             self.ddb = duckdb.connect()
-        self.ddb.execute(f"SET temp_directory='{tmp_path}'")
+        self.ddb.execute(f"SET temp_directory='{cache_path}'")
         self._tables = dict()
-        self._to_local = to_local
+        self._caching = caching
         self._has_local = False
 
     @property
@@ -79,26 +79,30 @@ class Reader:
         self._ascending = True if ascending is None else ascending
         if self._sort_by is not None:
             self._sort_by_ddb = get_ddb_sort_str(sort_by=by, ascending=ascending)
+        
+        return self
 
     def distinct(self, value: bool | None):
         if value is None:
             self._distinct = False
         else:
             self._distinct = value
+        return self
 
     def drop(self, columns: str | list | None):
         self._drop = columns
+        return self
         
-    def _download_to_local(self):
+    def _to_cache(self):
         
         copy_to_tmp_directory(
                 src=self._path_org,
-                dest=self._path_tmp,
+                dest=self._path_cache,
                 filesystem=self._filesystem,
             )
         
-        self._path = self._path_tmp
-        self._has_local = True
+        self._path = self._path_cache
+        self._cached = True
 
     
 
@@ -129,8 +133,8 @@ class Reader:
         pass
     
     def set_dataset(self, name: str = "dataset", **kwargs):
-        if self._to_local and not self.has_local:
-            self._download_to_local()
+        if self._caching and not self._cached:
+            self._to_cache()
             
         name = self._gen_name(name)
 
@@ -156,8 +160,8 @@ class Reader:
         drop: str | list | None = None,
         **kwargs,
     ):
-        if self._to_local and not self.has_local:
-            self._download_to_local()
+        if self._caching and not self._cached:
+            self._to_cache()
             
         name = self._gen_name(name)
 
@@ -204,8 +208,8 @@ class Reader:
         distinct: bool = False,
         drop: str | list | None = None,
     ):
-        if self._to_local and not self.has_local:
-            self._download_to_local()
+        if self._caching and not self._cached:
+            self._to_cache()
             
         name = self._gen_name(name)
 
@@ -264,8 +268,8 @@ class Reader:
         distinct: bool = False,
         drop: str | list | None = None,
     ):
-        if self._to_local and not self.has_local:
-            self._download_to_local()
+        if self._caching and not self._cached:
+            self._to_cache()
             
         if sort_by is not None:
             self.sort(by=sort_by, ascending=ascending)
@@ -324,8 +328,8 @@ class Reader:
         distinct: bool | None = None,
         drop: str | list | None = None,
     ):
-        if self._to_local and not self.has_local:
-            self._download_to_local()
+        if self._caching and not self._cached:
+            self._to_cache()
             
         self.sort(by=sort_by, ascending=ascending)
         self.drop(drop)
@@ -379,8 +383,8 @@ class Reader:
         distinct: bool | None = None,
         drop: str | list | None = None,
     ):
-        if self._to_local and not self.has_local:
-            self._download_to_local()
+        if self._caching and not self._cached:
+            self._to_cache()
             
         self.sort(by=sort_by, ascending=ascending)
         self.drop(drop)
