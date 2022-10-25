@@ -10,9 +10,9 @@ import pyarrow.filesystem as pafs
 import pyarrow.parquet as pq
 import s3fs
 
-from ..filesystem import is_file, copy_to_tmp_directory
-from ..filesystem import open as open_
-from ..filesystem import path_exists
+from ..filesystem.aws import is_file, copy_to_tmp_directory
+from ..filesystem.aws import open as open_
+from ..filesystem.aws import path_exists
 from ..utils import (
     distinct_table,
     get_ddb_sort_str,

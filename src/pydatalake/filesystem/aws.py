@@ -11,7 +11,7 @@ import yaml
 from fsspec.implementations import arrow, local
 
 
-class AWSCredentialsManager:
+class AwsCredentialsManager:
     def __init__(
         self,
         profile: str = "default",
@@ -32,7 +32,7 @@ class AWSCredentialsManager:
             self.load_credentials()
 
     @staticmethod
-    def load_credentials(filename: str | Path, profile: str) -> dict[str, str]:
+    def _load_credentials(filename: str | Path, profile: str) -> dict[str, str]:
         config = configparser.ConfigParser()
 
         if isinstance(filename, (str, Path)):
@@ -105,153 +105,12 @@ class AWSCredentialsManager:
         self._profile = profile
         self.load_credentials()
 
-
-class S5CMD(AWSCredentialsManager):
-    def __init__(
-        self,
-        bucket: str | None = None,
-        profile: str = "default",
-        credentials: str | Path | dict[str, str] = "~/.aws/credentials",
-    ) -> None:
-        super().__init__(profile=profile, credentials=credentials)
-        self._bucket = bucket
-
-    def _gen_path(self, path: str | Path) -> str | Path:
-        if self._bucket is not None:
-            return os.path.join(self._bucket, path)
-        else:
-            return path
-
-    def _strip_bucket(self, path: str) -> str:
-        if self._bucket is not None:
-            return path.split(self._bucket)[-1].lstrip("/")
-        else:
-            return path
-
-    def _add_global_options(self, *args, **kwargs) -> str:
-        options = [f"--{arg}" if len(arg) > 1 else f"-{arg}" for arg in args]
-        options += [f"--{k} {v}" if len(k) > 1 else f"-{k} {v}" for k, v in kwargs]
-        return " ".join(options) + " "
-
-    @staticmethod
-    def _format_error(stderr:bytes)->dict[str, str] | str |None:
-        stderr:str = stderr.decode("uft-8").strip()
-
-        if len(stderr)>0:
-            if stderr[0] == "{":
-                return json.loads(stderr)
-            else:
-                return stderr            
-                
-            
-    @staticmethod
-    def _format_out(stdout:bytes, with_stat:bool)-> list[Any]|None:
-        stdout:str = stdout.decode("utf-8").strip()
-               
-        if len(stdout)>0:
-            if stdout[0]=="{":
-                res = [json.loads(e) for e in stdout.split()]
-
-            if with_stat:
-                stat = res[-1]
-
-                if stat["success"] == 1:
-                    return res[:-1]
     
-    def _run_command(self, command: str, *args, **kwargs) -> list[Any] | str:
+    def set_profile(self, profile:str) -> None:
+        self._export_env(profile=profile)
 
-        with_stat = kwargs.pop("with_stat", True)
 
-        if not isinstance(with_stat, bool):
-            raise TypeError("with_stat must be of type bool.")
 
-        if self.has_s5cmd:
-
-            command_ = "s5cmd --stat " if with_stat else "s5cmd "
-            command_ += self._add_global_options(*args, **kwargs)
-            command_ += command
-
-            res = subprocess.run(command_, shell=True, capture_output=True)
-
-            stdout = self._format_out(res.stdout)
-            strerr = self._format_error(res.stderr)
-
-            if "json" in args:
-                res = [json.loads(e) for e in res.split()]
-
-                if with_stat:
-                    stat = res[-1]
-
-                    if stat["success"] == 1:
-                        return res[:-1]
-
-                    else:
-                        raise subprocess.SubprocessError(
-                            f"Running command {command_} finished with an error."
-                        )
-
-                else:
-                    return res
-            else:
-                return res
-
-        else:
-            raise FileNotFoundError(
-                "s5cmd not found. See here for more information https://github.com/peak/s5cmd."
-            )
-
-    @staticmethod
-    def _check_for_s5cmd() -> bool:
-        res = subprocess.run("which s5cmd", shell=True, capture_output=True)
-        return res.returncode == 0
-
-    @property
-    def has_s5cmd(self):
-        if not hasattr(self, "_has_s5cmd"):
-            self._has_s5cmd = self._check_for_s5cmd()
-
-        return self._has_s5cmd
-
-    def print_help(self, operation: str = "cp"):
-        command = f"{operation} -h"
-        res = self._run_command(command, with_stat=False)
-        print(res)
-
-    def ls(self, path: str) -> list:
-        pass
-
-    def cp(self):
-        pass
-
-    def rm(self):
-        pass
-
-    def mv(self):
-        pass
-
-    def mb(self):
-        pass
-
-    def rb(self):
-        pass
-
-    def select(self):
-        pass
-
-    def du(self):
-        pass
-
-    def cat(self):
-        pass
-
-    def run(self):
-        pass
-
-    def version(self):
-        pass
-
-    def sync(self):
-        pass
 
 
 # class FileSystem:
