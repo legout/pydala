@@ -7,8 +7,7 @@ from typing import Any
 import os
 import sys
 
-sys.path.append("/home/ubuntu/myPython/pydatalake/src/pydatalake")
-from filesystem.aws import AwsCredentialsManager
+from .aws import AwsCredentialsManager
 
 
 class S5CMD(AwsCredentialsManager):
@@ -19,7 +18,10 @@ class S5CMD(AwsCredentialsManager):
         credentials: str | Path | dict[str, str] = "~/.aws/credentials",
     ) -> None:
         super().__init__(profile=profile, credentials=credentials)
-        self._bucket = bucket if bucket.startswith("s3://") else f"s3://{bucket}"
+        if bucket is not None:
+            self._bucket = bucket if bucket.startswith("s3://") else f"s3://{bucket}"
+        else:
+            self._bucket = None
 
     def _gen_path(self, path: str | Path, recursive: bool = False) -> str | Path:
         """Generates path based on the given parameters and the initial bucket name"""
@@ -33,10 +35,11 @@ class S5CMD(AwsCredentialsManager):
         if "s3" in path:
             path = path.lstrip("s3").lstrip(":").lstrip("/")
 
-        # path = path.rstrip("*").rstrip("/")
+            if self._bucket is not None:
+                path = os.path.join(self._bucket, path)
 
-        if self._bucket is not None:
-            path = os.path.join(self._bucket, path)
+            if not path.startswith("s3"):
+                path = "s3://" + path
 
         if recursive:
             if not path.endswith("/*"):
@@ -67,7 +70,7 @@ class S5CMD(AwsCredentialsManager):
     @staticmethod
     def _format_error(stderr: bytes) -> str:
         """Formats the stderr"""
-        
+
         stderr: str = stderr.decode().strip()
         return stderr
 
@@ -146,7 +149,9 @@ class S5CMD(AwsCredentialsManager):
 
     def print_help(self, operation: str = "cp"):
         if self._has_s5cmd:
-            resp = subprocess.run(f"s5cmd {operation} -h", shell=True, capture_output=True)
+            resp = subprocess.run(
+                f"s5cmd {operation} -h", shell=True, capture_output=True
+            )
             if len(resp.stdout) > 0:
                 print(resp.stdout.decode().strip())
             else:
@@ -159,7 +164,7 @@ class S5CMD(AwsCredentialsManager):
     def ls(
         self,
         path: str,
-        with_object_info: bool = False,
+        detail: bool = False,
         only_objects: bool = True,
         recursive: bool = False,
         global_options: str | None = "--json --stat",
@@ -171,7 +176,7 @@ class S5CMD(AwsCredentialsManager):
 
         Args:
             path (str): Objects path.
-            with_file_info (bool, optional): Return list of objects or list with 
+            detail (bool, optional): Return list of objects or list with
                 objects and object information. Defaults to False.
             only_objects (bool, optional): Return only objects or also paths. Defaults to True.
             recursive (bool, optional): Recursive. Defaults to False.
@@ -191,7 +196,7 @@ class S5CMD(AwsCredentialsManager):
             global_options=global_options,
         )
         if len(res) > 0:
-            if not with_object_info:
+            if not detail:
                 if only_objects:
                     return (
                         list(
@@ -431,7 +436,7 @@ class S5CMD(AwsCredentialsManager):
         """Print remote object content
 
         Run `print_help("cat")` for more information.
-        
+
         Args:
             object (str | Path): Object path.
 
