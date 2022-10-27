@@ -1,0 +1,17 @@
+[0;31mSignature:[0m [0mfs[0m[0;34m.[0m[0mmkdir[0m[0;34m([0m[0mpath[0m[0;34m,[0m [0mcreate_parents[0m[0;34m=[0m[0;32mTrue[0m[0;34m,[0m [0;34m**[0m[0mkwargs[0m[0;34m)[0m[0;34m[0m[0;34m[0m[0m
+[0;31mDocstring:[0m
+Create directory entry at path
+
+For systems that don't have true directories, may create an for
+this instance only and not touch the real filesystem
+
+Parameters
+----------
+path: str
+    location
+create_parents: bool
+    if True, this is equivalent to ``makedirs``
+kwargs:
+    may be permissions, etc.
+[0;31mFile:[0m      ~/mambaforge/envs/main/lib/python3.10/site-packages/fsspec/implementations/arrow.py
+[0;31mType:[0m      method

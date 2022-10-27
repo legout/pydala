@@ -192,10 +192,11 @@ class FileSystem:
         if self._bucket is not None:
             if self._bucket not in path:
                 return os.path.join(self._bucket, path)
-            else:
-                return path
-        else:
-            return path
+
+        return path
+
+    def _gen_paths(self, paths: list) -> list:
+        return list(map(self._gen_path, paths))
 
     def _strip_path(self, path: str) -> str:
         if self._bucket is not None:
@@ -203,7 +204,7 @@ class FileSystem:
         else:
             return path
 
-    def _strip_paths(self, paths:list)->list:
+    def _strip_paths(self, paths: list) -> list:
         return list(map(self._strip_path, paths))
 
     def set_env(self, **kwargs):
@@ -234,7 +235,8 @@ class FileSystem:
             dict: dict of {path: contents} if there are multiple paths
                 or the path has been otherwise expanded
         """
-
+        if isinstance(path, str):
+            path = [path]
         return self._filesystem.cat(
             path=self._gen_path(path), recursive=recursive, on_error=on_error, **kwargs
         )
@@ -260,10 +262,20 @@ class FileSystem:
         Returns:
             str: file content
         """
-
-        return self._filesystem.cat_file(
-            path=self._gen_path(path), version_id=version_id, start=start, end=end, **kwargs
-        )
+        if isinstance(self._filesystem, s3fs.S3FileSystem):
+            return self._filesystem.cat_file(
+                path=self._gen_path(path),
+                version_id=version_id,
+                start=start,
+                end=end,
+                **kwargs,
+            )
+        else:
+            return self._filesystem.cat_file(
+                path=self._gen_path(path),
+                start=start,
+                end=end,
+                **kwargs,
 
     def checksum(self, path: str, refresh: bool = False):
         """Unique value for current version of file
@@ -276,8 +288,10 @@ class FileSystem:
         Returns:
             str: checksum
         """
-
-        return self._filesystem.checksum(path=self._gen_path(path), refresh=refresh)
+        if isinstance(self._filesystem, s3fs.S3FileSystem):
+            return self._filesystem.checksum(path=self._gen_path(path), refresh=refresh)
+        else:
+            return self._filesystem.checksum(path=self._gen_path(path))
 
     def copy(
         self,
@@ -285,6 +299,8 @@ class FileSystem:
         path2: str,
         recursive: bool = False,
         on_error: str | None = None,
+        maxdepth: int | None = None,
+        batch_size: int | None = None,
         **kwargs,
     ):
         """Copy within two locations in the filesystem.
@@ -297,13 +313,27 @@ class FileSystem:
                 will be raised; if ignore any not-found exceptions will cause
                 the path to be skipped; defaults to raise unless recursive is true,
         """
-
-        self._filesystem.copy(
-            self._gen_path(path1), self._gen_path(path2), recursive=recursive, on_error=on_error, **kwargs
-        )
+        if isinstance(self._filesystem, s3fs.S3FileSystem):
+            self._filesystem.copy(
+                self._gen_path(path1),
+                self._gen_path(path2),
+                recursive=recursive,
+                on_error=on_error,
+                maxdepth=maxdepth,
+                batch_size=batch_size,
+                **kwargs,
+            )
+        else:
+            self._filesystem.copy(
+                self._gen_path(path1),
+                self._gen_path(path2),
+                recursive=recursive,
+                on_error=on_error,
+                **kwargs,
+            )
 
     def cp(self, *args, **kwargs):
-        self.copy(*args, **kwargs)
+        self.cp(*args, **kwargs)
 
     def cp_file(self, path1: str, path2: str, **kwargs):
         """Copy file between locations on S3.
@@ -335,7 +365,11 @@ class FileSystem:
                 to delete, if recursive. If None, there will be no limit and infinite
                 recursion may be possible. Defaults to None.
         """
-        self._filesystem.delete(self._gen_path(path), recursive=recursive, maxdepth=maxdepth)
+        if isinstance(path, str):
+            path = [path]
+        self._filesystem.delete(
+            self._gen_paths(path), recursive=recursive, maxdepth=maxdepth
+        )
 
     def du(self, path: str, total: bool = True, maxdepth: int | None = None, **kwargs):
         """Space used by files within a path
@@ -350,25 +384,37 @@ class FileSystem:
             Dict of {fn: size} if total=False, or int otherwise, where numbers
                 refer to bytes used.
         """
-        return self._filesystem.du(path=self._gen_path(path), total=total, maxdepth=maxdepth, **kwargs)
+        return self._filesystem.du(
+            path=self._gen_path(path), total=total, maxdepth=maxdepth, **kwargs
+        )
 
     def disk_usage(self, *args, **kwargs):
         self.du(*args, **kwargs)
 
     def download(self, *args, **kwargs):
-        self.get(*args, **kwargs)
+        self.download(*args, **kwargs)
 
     def exists(self, path: str) -> bool:
         """Returns True, if path exists, else returns False"""
         return self._filesystem.exists(self._gen_path(path))
 
-    def get(self, rpath: str, lpath: str, recursive: bool = False, **kwargs):
+    def get(
+        self,
+        rpath: str,
+        lpath: str,
+        recursive: bool = False,
+        batch_size: int | None = None,
+        **kwargs,
+    ):
         """Copy file(s) to local.
 
         Copies a specific file or tree of files (if recursive=True). If lpath
         ends with a "/", it will be assumed to be a directory, and target files
         will go within. Can submit a list of paths, which may be glob-patterns
         and will be expanded.
+
+        ---------------------------------
+        Only available when using s3fs.S3FileSystem:
 
         The get_file method will be called concurrently on a batch of files. The
         batch_size option can configure the amount of futures that can be executed
@@ -377,18 +423,34 @@ class FileSystem:
         constructor, or for all instances by setting the "gather_batch_size" key
         in ``fsspec.config.conf``, falling back to 1/8th of the system limit.
         """
-        self._filesystem.get(self._gen_path(rpath), lpath, recursive=recursive, **kwargs)
+        if isinstance(self._filesystem, s3fs.S3FileSystem):
+            self._filesystem.get(
+                self._gen_path(rpath),
+                lpath,
+                recursive=recursive,
+                batch_size=batch_size,
+                **kwargs,
+            )
+        else:
+            self._filesystem.get(
+                self._gen_path(rpath), lpath, recursive=recursive, **kwargs
+            )
 
     def get_file(
         self,
         rpath: str,
         lpath: str,
         callback: object | None = None,
+        outfile:str|None=None,
+        **kwargs
     ):
         """Copy single remote file to local"""
-        self._filesystem.get_file(self._gen_path(rpath), lpath, callback=callback)
+        if isinstance(self._filesystem, s3fs.S3FileSystem):
+            self._filesystem.get_file(self._gen_path(rpath), lpath, callback=callback)
+        else:
+            self._filesystem.get_file(self._gen_path(rpath), lpath, callback=callback, outfile=outfile)
 
-    def glob(self, path:str, **kwargs)->list:
+    def glob(self, path: str, **kwargs) -> list:
         """Find files by glob-matching.
 
         If the path ends with '/' and does not contain "*", it is essentially
@@ -404,12 +466,11 @@ class FileSystem:
         kwargs are passed to ``ls``."""
         return self._strip_paths(self._filesystem.glob(self._gen_path(path), **kwargs))
 
-    def head(self, path:str, size:int=1024)->str|bytes:
+    def head(self, path: str, size: int = 1024) -> str | bytes:
         """Get the first ``size`` bytes from file"""
-        path = self._gen_path(path)
         return self._filesystem.head(path=self._gen_path(path), size=size)
 
-    def info(self, path, **kwargs)->dict:
+    def info(self, path, **kwargs) -> dict:
         """Give details of entry at path
 
         Returns a single dictionary, with exactly the same information as ``ls``
@@ -426,13 +487,9 @@ class FileSystem:
         dict with keys: name (full path in the FS), size (in bytes), type (file,
         directory, or something else) and other FS-specific keys."""
 
-
         return self._filesystem.info(self._gen_path(path), **kwargs)
 
-    def
-        
-
-    def invalidate_cache(self, path: str | None = None)->None:
+    def invalidate_cache(self, path: str | None = None) -> None:
         """Discard any cached directory information
 
         Parameters
@@ -440,7 +497,6 @@ class FileSystem:
         path: string or None
             If None, clear all listings cached else listings at or under given
             path."""
-        path = self._gen_path(path)
         self._filesystem.invalidate_cache(path=self._gen_path(path))
 
     def isfile(
@@ -457,15 +513,17 @@ class FileSystem:
         """Is this entry directory-like?"""
         return self._filesystem.isdir(self._gen_path(path))
 
-    def lexists(self, poath:str) ->bool:
+    def lexists(self, poath: str) -> bool:
         """If there is a file at the given path (including
         broken links)"""
         return self._filesystem.lexists(self._gen_path(path))
 
-    def listdir(self, path:str, detail:bool=True)->list:
-        return self._strip_paths(self._filesystem.listdir(self._gen_path(path), detail=detail))
+    def listdir(self, path: str, detail: bool = True) -> list:
+        return self._strip_paths(
+            self._filesystem.listdir(self._gen_path(path), detail=detail)
+        )
 
-    def ls(self, path:str, detail:bool=False, **kwargs)->list:
+    def ls(self, path: str, detail: bool = False, **kwargs) -> list:
         """List objects at path.
 
         This should include subdirectories and files at that location. The
@@ -504,28 +562,340 @@ class FileSystem:
         List of strings if detail is False, or list of directory information
         dicts if detail is True."""
 
-        return self._strip_paths(self._filesystem.ls(self._gen_path(path), detail=True, **kwargs))
+        return self._strip_paths(
+            self._filesystem.ls(self._gen_path(path), detail=True, **kwargs)
+        )
 
-    def makedir():
+    def makedir(self, path: str, create_parents: bool = True, **kwargs):
+        self._filesystem.makedir(
+            self._gen_path(path), create_parents=create_parents, **kwargs
+        )
 
-    def merge():
+    def makedirs(self, path: str, exist_ok: bool = True):
+        """Recursively make directories
 
-    def mkdir():
+        Creates directory at path and any intervening required directories.
+        Raises exception if, for instance, the path already exists but is a
+        file.
 
-    def modified():
+        Parameters
+        ----------
+        path: str
+            leaf directory name
+        exist_ok: bool (False)
+            If False, will error if the target already exists"""
 
-    def mv()      :
+        self._filesystem.makedirs(self._gen_path(path), exist_ok=exist_ok)
 
-    def makedirs(): 
+    def merge(self, path: str, filelist: list, **kwargs):
+        """Create single S3 file from list of S3 files
 
-    def metadata(): 
+        Uses multi-part, no data is downloaded. The original files are
+        not deleted.
 
-    def mkdirs():
+        Parameters
+        ----------
+        path : str
+            The final file to produce
+        filelist : list of str
+            The paths, in order, to assemble into the final file."""
+        if isinstance(self._filesystem, s3fs.S3FileSystem):
+            filelist = [self._gen_path(f) for f in filelist]
+            path = self._gen_path(path)
+            self._filesystem.merge(path, filelist, **kwargs)
 
-    def move():
-    
-    def open(self, path: str, mode="r", **kwargs):
-        return self._filesystem.open(path, mode=mode, **kwargs)
+        else:
+            raise NotImplemented(
+                f"Merge is not implmented for {type(self._fs)} use s3fs.S3FileSystem instead."
+            )
+
+    def metadata(self, path: str, refresh: bool = False, **kwargs):
+        """Return metadata of path.
+
+        Parameters
+        ----------
+        path : string/bytes
+            filename to get metadata for
+        refresh : bool (=False)
+            (ignored)"""
+        if isinstance(self._filesystem, s3fs.S3FileSystem):
+            self._filesystem.metadata(self._gen_path(path), refresh=refresh, **kwargs)
+        else:
+            raise NotImplemented(
+                f"Merge is not implmented for {type(self._fs)} use s3fs.S3FileSystem instead."
+            )
+
+    def mkdir(self, path: str, create_parents: bool = True, **kwargs):
+        """Create directory entry at path
+
+        For systems that don't have true directories, may create an for
+        this instance only and not touch the real filesystem
+
+        Parameters
+        ----------
+        path: str
+            location
+        create_parents: bool
+            if True, this is equivalent to ``makedirs``
+        kwargs:
+            may be permissions, etc."""
+        self._filesystem.mkdir(
+            self._gen_path(path), create_parents=create_parents, **kwargs
+        )
+
+    def mkdirs(self, path: str, exist_ok: bool = True):
+        self._filesystem.mkdirs(self._gen_path(path), exist_ok=exist_ok)
+
+    def modified(self, path: str):
+        """Return the modified timestamp of a file as a datetime.datetime"""
+        return self._filesystem.modified(self._gen_path(path))
+
+    def move(self, path1: str, path2: str, **kwargs):
+        self._filesystem.move(self._gen_path(path1), self._gen_path(path2), **kwargs)
+
+    def mv(self, path1: str, path2: str, **kwargs):
+        """Move file(s) from one location to another"""
+        self._filesystem.mv(self._gen_path(path1), self._gen_path(path2), **kwargs)
+
+    def mv_file(self, path1: str, path2: str, **kwargs):
+        """Move file(s) from one location to another"""
+        if not isinstance(self._filesystem, s3fs.S3FileSystem):
+            self._filesystem.mv_file(
+                self._gen_path(path1), self._gen_path(path2), **kwargs
+            )
+        else:
+            raise NotImplemented(
+                f"Merge is not implmented for {type(self._fs)} use pyarrow.fs.S3FileSystem instead."
+            )
+
+    def open(
+        self,
+        path: str,
+        mode: str = "rb",
+        block_size: int | None = None,
+        cache_options: dict | None = None,
+        compression: str | None = None,
+        **kwargs,
+    ):
+        """Return a file-like object from the filesystem
+
+        The resultant instance must function correctly in a context ``with``
+        block.
+
+        Parameters
+        ----------
+        path: str
+            Target file
+        mode: str like 'rb', 'w'
+            See builtin ``open()``
+        block_size: int
+            Some indication of buffering - this is a value in bytes
+        cache_options : dict, optional
+            Extra arguments to pass through to the cache.
+        compression: string or None
+            If given, open file using compression codec. Can either be a compression
+            name (a key in ``fsspec.compression.compr``) or "infer" to guess the
+            compression from the filename suffix.
+        encoding, errors, newline: passed on to TextIOWrapper for text mode
+        """
+        return self._filesystem.open(
+            self._gen_path(path),
+            mode=mode,
+            block_size=block_size,
+            cache_options=cache_options,
+            compression=compression,
+            **kwargs,
+        )
+
+    def open_async(self, path: str, mode: str = "rb", **kwargs):
+        if isinstance(self._fs, s3fs.S3FileSystem):
+            return self._filesystem.open_async(
+                self._gen_path(path), mode=mode, **kwargs
+            )
+        else:
+            raise NotImplemented(
+                f"Merge is not implmented for {type(self._fs)} use s3fs.S3FileSystem instead."
+            )
+
+    def pipe(
+        self,
+        path: str,
+        value: bytes | None = None,
+        batch_size: int | None = None,
+        **kwargs,
+    ):
+        """Put value into path
+
+        (counterpart to ``cat``)
+
+        Parameters
+        ----------
+        path: string or dict(str, bytes)
+            If a string, a single remote location to put ``value`` bytes; if a dict,
+            a mapping of {path: bytesvalue}.
+        value: bytes, optional
+            If using a single path, these are the bytes to put there. Ignored if
+            ``path`` is a dict"""
+        if isinstance(self._filesystem, s3fs.S3FileSystem):
+            self._filesystem.pipe(
+                self._gen_path(path), value=value, batch_size=batch_size, **kwargs
+            )
+        else:
+            self._filesystem.pipe(self._gen_path(path), value=value, **kwargs)
+
+    def pipe_file(
+        self, path: str, data: bytes | None = None, chunksize: int = 52428800, **kwargs
+    ):
+        """Set the bytes of given file"""
+        if isinstance(self._filesystem, s3fs.S3FileSystem):
+            self._filesystem.pipe_file(
+                self._gen_path(path), data=data, chunksize=chunksize, **kwargs
+            )
+        else:
+            self._filesystem.pipe_file(self._gen_path(path), value=data, **kwargs)
+
+    @property
+    def protocol(self):
+        return self._filesystem.protocol
+
+    def put(
+        self,
+        lpath: str,
+        rpath: str,
+        recursive: bool = False,
+        callback: object | None = None,
+        batch_size: int | None = None,
+        **kwargs,
+    ):
+        """Copy file(s) from local.
+
+        Copies a specific file or tree of files (if recursive=True). If rpath
+        ends with a "/", it will be assumed to be a directory, and target files
+        will go within.
+
+        -----------------------------------------------
+        Only available when using the s3fs.S3Filesystem:
+
+        The put_file method will be called concurrently on a batch of files. The
+        batch_size option can configure the amount of futures that can be executed
+        at the same time. If it is -1, then all the files will be uploaded concurrently.
+        The default can be set for this instance by passing "batch_size" in the
+        constructor, or for all instances by setting the "gather_batch_size" key
+        in ``fsspec.config.conf``, falling back to 1/8th of the system limit ."""
+
+        if isinstance(self._fs, s3fs.S3FileSystem):
+            self._filesystem.put(
+                lpath,
+                self._gen_path(rpath),
+                recursive=recursive,
+                callback=callback,
+                batch_size=batch_size,
+                **kwargs,
+            )
+        else:
+            self._filesystem.put(
+                lpath,
+                self._gen_path(rpath),
+                recursive=recursive,
+                callback=callback,
+                **kwargs,
+            )
+
+    def put_file(
+        self,
+        lpath: str,
+        rpath: str,
+        callback: object | None,
+        chunksize: int = 52428800,
+        **kwargs,
+    ):
+        """Copy single file to remote"""
+        if isinstance(self._fs, s3fs.S3FileSystem):  #
+            self._filesystem.put_file(
+                lpath,
+                self._gen_path(rpath),
+                callback=callback,
+                chunksize=chunksize,
+                **kwargs,
+            )
+        else:
+            self._filesystem.put_file(
+                lpath, self._gen_path(rpath), callback=callback, **kwargs
+            )
+
+    def put_tags(self, path: str, tags: dict | str, mode="o"):
+        """Set tags for given existing key
+
+        Tags are a str:str mapping that can be attached to any key, see
+        https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/allocation-tag-restrictions.html
+
+        This is similar to, but distinct from, key metadata, which is usually
+        set at key creation time.
+
+        Parameters
+        ----------
+        path: str
+            Existing key to attach tags to
+        tags: dict str, str
+            Tags to apply.
+        mode:
+            One of 'o' or 'm'
+            'o': Will over-write any existing tags.
+            'm': Will merge in new tags with existing tags.  Incurs two remote
+            calls."""
+
+        if isinstance(self._filesystem, s3fs.S3FileSystem):
+            self._filesystem.put_tags(self._gen_path(path), tags=tags, mode=mode)
+        else:
+            raise NotImplemented(
+                f"Merge is not implmented for {type(self._fs)} use s3fs.S3FileSystem instead."
+            )
+
+    def read_block(
+        self, fn: str, offset: int, length: int, delimiter: str | None = None
+    ):
+        """Read a block of bytes from
+
+        Starting at ``offset`` of the file, read ``length`` bytes.  If
+        ``delimiter`` is set then we ensure that the read starts and stops at
+        delimiter boundaries that follow the locations ``offset`` and ``offset
+        + length``.  If ``offset`` is zero then we start at zero.  The
+        bytestring returned WILL include the end delimiter string.
+
+        If offset+length is beyond the eof, reads to eof.
+
+        Parameters
+        ----------
+        fn: string
+            Path to filename
+        offset: int
+            Byte offset to start read
+        length: int
+            Number of bytes to read
+        delimiter: bytes (optional)
+            Ensure reading starts and stops at delimiter bytestring
+
+        Examples
+        --------
+        >>> fs.read_block('data/file.csv', 0, 13)  # doctest: +SKIP
+        b'Alice, 100\nBo'
+        >>> fs.read_block('data/file.csv', 0, 13, delimiter=b'\n')  # doctest: +SKIP
+        b'Alice, 100\nBob, 200\n'
+
+        Use ``length=None`` to read to the end of the file.
+        >>> fs.read_block('data/file.csv', 0, None, delimiter=b'\n')  # doctest: +SKIP
+        b'Alice, 100\nBob, 200\nCharlie, 300'
+
+        See Also
+        --------
+        utils.read_block"""
+
+        self._filesystem.read_block(
+            self._gen_path(fn), offset=offset, length=length, delimiter=delimiter
+        )
+
+    def rename(self, path1: str, path2: str, **kwargs):
+        self._filesystem.rename(self._gen_path(path1), self._gen_path(path2), **kwargs)
 
     def rm(
         self, path: str | list, recursive: bool = False, maxdepth: int | None = None
@@ -540,5 +910,130 @@ class FileSystem:
                 to delete, if recursive. If None, there will be no limit and infinite
                 recursion may be possible. Defaults to None.
         """
-        path = self._gen_path(path)
-        self._filesystem.rm(path, recursive=recursive, maxdepth=maxdepth)
+        if isinstance(path, str):
+            path = [path]
+        self._filesystem.rm(
+            self._gen_paths(path), recursive=recursive, maxdepth=maxdepth
+        )
+
+    def rm_file(self, path: str):
+        """Delete a file"""
+        self._filesystem.rm_file(self._gen_path(path))
+
+    def rmdir(self, path: str):
+        """Remove a directory, if empty"""
+        self._filesystem.rmdir(self._gen_path(path))
+
+    def sign(self, path: str, expiration: int = 100, **kwargs):
+        """Create a signed URL representing the given path
+
+        Some implementations allow temporary URLs to be generated, as a
+        way of delegating credentials.
+
+        Parameters
+        ----------
+        path : str
+            The path on the filesystem
+        expiration : int
+            Number of seconds to enable the URL for (if supported)
+
+        Returns
+        -------
+        URL : str
+            The signed URL
+
+        Raises
+        ------
+        NotImplementedError : if method is not implemented for a filesystem"""
+
+        return self._filesystem.sign(
+            self._gen_path(path), expiration=expiration, **kwargs
+        )
+
+    def size(self, path: str):
+        """Size in bytes of file"""
+        return self._filesystem.size(self._gen_path(path))
+
+    def sizes(self, paths: str | list):
+        """Size in bytes of each file in a list of paths"""
+        if isinstance(paths, str):
+            paths = [paths]
+        return self._filesystem.sizes(self._gen_paths(paths))
+
+    def stat(self, path: str, **kwargs):
+        return self._filesystem.stat(self._gen_path(path), **kwargs)
+
+    def tail(self, path: str, size: int = 1024):
+        """Get the last ``size`` bytes from file"""
+        return self._filesystem.tail(self._gen_path(path), size=size)
+
+    def touch(self, path: str, truncate: bool = True, **kwargs):
+        """Create empty file, or update timestamp
+
+        Parameters
+        ----------
+        path: str
+            file location
+        truncate: bool
+            If True, always set file size to 0; if False, update timestamp and
+            leave file unchanged, if backend allows this"""
+
+        self._filesystem.touch(self._gen_path(path), truncate=truncate)
+
+    def ukey(self, path: str):
+        """Hash of file properties, to tell if it has changed"""
+        return self._filesystem.ukey(self._gen_path(path))
+
+    def upload(self, lpath: str, rpath: str, recursive: bool = False, **kwargs):
+        self._filesystem.upload(
+            lpath, self._gen_path(rpath), recursive=recursive, **kwargs
+        )
+
+    def url(
+        self,
+        path: str,
+        expires: int = 3600,
+        client_method: str = "get_object",
+        **kwargs,
+    ):
+        """Generate presigned URL to access path by HTTP
+
+        Parameters
+        ----------
+        path : string
+            the key path we are interested in
+        expires : int
+            the number of seconds this signature will be good for."""
+        if isinstance(self._filesystem, s3fs.S3FileSystem):
+            return self._filesystem.url(
+                self._gen_path(path),
+                expires=expires,
+                client_method=client_method,
+                **kwargs,
+            )
+        else:
+            raise NotImplemented(
+                f"Merge is not implmented for {type(self._fs)} use s3fs.S3FileSystem instead."
+            )
+
+    def walk(self, path: str, maxdepth: int | None = None, **kwargs):
+        """Return all files belows path
+
+        List all files, recursing into subdirectories; output is iterator-style,
+        like ``os.walk()``. For a simple list of files, ``find()`` is available.
+
+        Note that the "files" outputted will include anything that is not
+        a directory, such as links.
+
+        Parameters
+        ----------
+        path: str
+            Root to recurse into
+        maxdepth: int
+            Maximum recursion depth. None means limitless, but not recommended
+            on link-based file-systems.
+        kwargs: passed to ``ls``"""
+
+        return self._strip_paths(
+            self._filesystem.walk(self._gen_path(path), maxdepth=maxdepth, **kwargs)
+        )
