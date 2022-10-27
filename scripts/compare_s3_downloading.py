@@ -318,7 +318,7 @@ from dask.diagnostics import ProgressBar
 dask.config.set(scheduler='processes', num_workers=8)
 
 
-def _s3_download(path, bucket, key):
+def _s3_download(session, path, bucket, key):
     """wrapper to avoid crushing on not found objects
     s3_client: s3 resource service client
     path: path to store the downloaded file
@@ -352,9 +352,9 @@ def fetch_multiple(profile_name, bucket, keys,
         profile_name=profile_name
     )
 
-    s3 = session.client("s3", region_name="eu-central-1")
+    #s3 = session.client("s3", region_name="eu-central-1")
 
-    _download = partial(_s3_download, s3, path, bucket)
+    _download = partial(_s3_download, session, path, bucket)
 
     delayed_futures = []
     for k in keys:

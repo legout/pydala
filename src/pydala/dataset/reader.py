@@ -1,18 +1,14 @@
-from importlib.resources import path
 import uuid
 import duckdb
+import os
 import pandas as pd
 import polars as pl
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.feather as pf
-import pyarrow.filesystem as pafs
 import pyarrow.parquet as pq
-import s3fs
-
-from ..filesystem.aws import is_file, copy_to_tmp_directory
-from ..filesystem.aws import open as open_
-from ..filesystem.aws import path_exists
+from tempfile import mkdtemp
+from ..filesystem import FileSystem, S5CMD
 from ..utils import (
     distinct_table,
     get_ddb_sort_str,
@@ -31,52 +27,56 @@ class Reader:
         bucket: str | None = None,
         name: str | None = None,
         partitioning: ds.Partitioning | str | None = None,
-        filesystem: pafs.FileSystem | s3fs.S3FileSystem | None = None,
+        filesystem: FileSystem,
         format: str | None = "parquet",
         sort_by: str | list | None = None,
         ascending: bool | list | None = None,
         distinct: bool | None = None,
         drop: str | list | None = "__index_level_0__",
         ddb: duckdb.DuckDBPyConnection | None = None,
-        cache_path:str = "/tmp/duckdb",
-        caching:bool=False
+        caching:bool=False,
+        cache_prefix:str|None="/tmp/pydala",
+        
     ):
-        self._path = (
-            f"{bucket}/{path}".replace("//", "/") if bucket is not None else path
-        )
-        self._path_org = self._path
-        self._path_cache =  f"{cache_path}/{uuid.uuid4().hex}/{self._path}").replace("//", "/")
         self._bucket = bucket
         self._name = name
+
+        self._path = os.path.join(bucket, path) if bucket is not None else path
+        self._path_org = self._path
+            
         self._filesystem = filesystem
         self._format = format
         self._partitioning = partitioning
         self.sort(by=sort_by, ascending=ascending)
         self.distinct(distinct)
         self.drop(columns=drop)
+
+        self._caching = caching
+        self._has_local = False
+        self._cache_prefix = cache_prefix
+        if cache_prefix is not None:
+            os.makedirs(cache_prefix, exist_ok=True)
+            self._cache_path =  mkdtemp(prefix=cache_prefix)
+        else:
+            self._cache_path = mkdtemp()
         if ddb is not None:
             self.ddb = ddb
         else:
             self.ddb = duckdb.connect()
-        self.ddb.execute(f"SET temp_directory='{cache_path}'")
+        self.ddb.execute(f"SET temp_directory='{cache_prefix}'")
+
         self._tables = dict()
-        self._caching = caching
-        self._has_local = False
-
-    @property
-    def _path_exists(self) -> bool:
-        return path_exists(self._path, self._filesystem)
-
-    @property
-    def _is_file(self) -> bool:
-        return is_file(self._path, self._filesystem)
 
     def _gen_name(self, name: str):
         return f"{self._name}_{name}" if self._name is not None else name
 
     def sort(self, by: str | list | None, ascending: bool | list | None = None):
         self._sort_by = by
-        self._ascending = True if ascending is None else ascending
+        
+        if ascending is None:
+            ascending = True
+        self._ascending = ascending 
+        
         if self._sort_by is not None:
             self._sort_by_ddb = get_ddb_sort_str(sort_by=by, ascending=ascending)
         
@@ -84,9 +84,9 @@ class Reader:
 
     def distinct(self, value: bool | None):
         if value is None:
-            self._distinct = False
-        else:
-            self._distinct = value
+            value = False
+        self._distinct = value
+            
         return self
 
     def drop(self, columns: str | list | None):
@@ -94,7 +94,7 @@ class Reader:
         return self
         
     def _to_cache(self):
-        
+        s5 = S5CMD()
         copy_to_tmp_directory(
                 src=self._path_org,
                 dest=self._path_cache,
