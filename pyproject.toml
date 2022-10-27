@@ -1,10 +1,10 @@
 [tool.poetry]
-name = "pydatalake"
+name = "pydala"
 version = "0.1.0"
 description = ""
 authors = ["Volker Lorrmann <volker.lorrmann@gmail.com>"]
 readme = "README.md"
-packages = [{include = "pydatalake", from = "src"}]
+packages = [{include = "pydala", from = "src"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"

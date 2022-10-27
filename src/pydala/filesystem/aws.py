@@ -407,7 +407,7 @@ class FileSystem:
     def head(self, path:str, size:int=1024)->str|bytes:
         """Get the first ``size`` bytes from file"""
         path = self._gen_path(path)
-        return self._filesystem.head(path=path, size=size)
+        return self._filesystem.head(path=self._gen_path(path), size=size)
 
     def info(self, path, **kwargs)->dict:
         """Give details of entry at path
@@ -441,7 +441,7 @@ class FileSystem:
             If None, clear all listings cached else listings at or under given
             path."""
         path = self._gen_path(path)
-        self._filesystem.invalidate_cache(path=path)
+        self._filesystem.invalidate_cache(path=self._gen_path(path))
 
     def isfile(
         self,
@@ -505,6 +505,24 @@ class FileSystem:
         dicts if detail is True."""
 
         return self._strip_paths(self._filesystem.ls(self._gen_path(path), detail=True, **kwargs))
+
+    def makedir():
+
+    def merge():
+
+    def mkdir():
+
+    def modified():
+
+    def mv()      :
+
+    def makedirs(): 
+
+    def metadata(): 
+
+    def mkdirs():
+
+    def move():
     
     def open(self, path: str, mode="r", **kwargs):
         return self._filesystem.open(path, mode=mode, **kwargs)
