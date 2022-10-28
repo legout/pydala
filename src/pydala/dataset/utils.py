@@ -1,5 +1,3 @@
-from dis import dis
-from shutil import ExecError
 import duckdb
 import pandas as pd
 import polars as pl

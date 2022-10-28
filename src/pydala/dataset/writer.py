@@ -11,8 +11,7 @@ import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 import s3fs
 
-from ..utils import open as open_
-from ..utils import to_ddb_relation
+from .utils import to_relation
 
 
 class Writer:

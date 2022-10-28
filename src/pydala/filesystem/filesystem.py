@@ -1,10 +1,12 @@
-from typing import Union
-from typing import Any
+import os
+from pathlib import Path
+from typing import Any, Union
 
 import pyarrow.fs as pafs
 import s3fs
-import os
 from fsspec.implementations import arrow, local
+
+from .utils import S5CMD
 
 fs_type = Union[s3fs.S3FileSystem, pafs.S3FileSystem, pafs.LocalFileSystem, None]
 
@@ -13,17 +15,20 @@ class FileSystem:
     def __init__(
         self,
         type_: str | None = "s3",
-        profile_name:str = "default",
+        aws_profile: str = "default",
         filesystem: fs_type = None,
         credentials: dict | None = None,
         bucket: str | None = None,
+        use_s5cmd: bool = True,
     ) -> None:
         self._bucket = bucket
         self._credentials = credentials
-        self._profile_name = profile_name
-        
+        self._aws_profile = aws_profile
+
         if credentials is not None:
-            self.set_env(**credentials)
+            self.set_aws_env(**credentials)
+        else:
+            self.set_aws_profile(aws_profile)
 
         if type_ is not None and filesystem is None:
             self._type = type_
@@ -71,17 +76,9 @@ class FileSystem:
         else:
             raise ValueError("type_ or filesystem must not be None.")
 
-    # @staticmethod
-    # def _check_for_s5cmd() -> bool:
-    #     res = subprocess.run("which s5cmd", shell=True, capture_output=True)
-    #     return res.returncode == 0
-
-    # @property
-    # def has_s5cmd(self):
-    #     if not hasattr(self, "_has_s5cmd"):
-    #         self._has_s5cmd = self._check_for_s5cmd()
-
-    #     return self._has_s5cmd
+        if self._type == "s3" and use_s5cmd and S5CMD._check_for_s5cmd():
+            self._s5 = S5CMD(bucket=bucket, profile=aws_profile)
+            self._has_s5cmd = True
 
     def _gen_path(self, path: str) -> str:
         if self._bucket is not None:
@@ -95,16 +92,20 @@ class FileSystem:
 
     def _strip_path(self, path: str) -> str:
         if self._bucket is not None:
-            return path.split(self._bucket)[-1]
+            return path.split(self._bucket)[-1].lstrip("/")
         else:
             return path
 
     def _strip_paths(self, paths: list) -> list:
         return list(map(self._strip_path, paths))
 
-    def set_env(self, **kwargs):
+    def set_aws_env(self, **kwargs):
         for k in kwargs:
             os.environ[k] = kwargs[k]
+
+    def set_aws_profile(self, name: str | None):
+        name = name or "default"
+        os.environ["AWS_PROFILE"] = name
 
     def cat(
         self,
@@ -411,7 +412,7 @@ class FileSystem:
         """Is this entry directory-like?"""
         return self._filesystem.isdir(self._gen_path(path))
 
-    def lexists(self, poath: str) -> bool:
+    def lexists(self, path: str) -> bool:
         """If there is a file at the given path (including
         broken links)"""
         return self._filesystem.lexists(self._gen_path(path))
@@ -459,10 +460,12 @@ class FileSystem:
         -------
         List of strings if detail is False, or list of directory information
         dicts if detail is True."""
+        
+        res = self._filesystem.ls(self._gen_path(path), detail=detail, **kwargs)
+        if detail:
+            return res
+        return self._strip_paths(res)
 
-        return self._strip_paths(
-            self._filesystem.ls(self._gen_path(path), detail=True, **kwargs)
-        )
 
     def makedir(self, path: str, create_parents: bool = True, **kwargs):
         self._filesystem.makedir(
@@ -931,7 +934,281 @@ class FileSystem:
             Maximum recursion depth. None means limitless, but not recommended
             on link-based file-systems.
         kwargs: passed to ``ls``"""
-
         return self._strip_paths(
             self._filesystem.walk(self._gen_path(path), maxdepth=maxdepth, **kwargs)
         )
+
+    def s5ls(
+        self,
+        path: str,
+        detail: bool = False,
+        only_objects: bool = True,
+        recursive: bool = False,
+        global_options: str | None = "--json --stat",
+        operation_options: str | None = None,
+        only_res: bool = True,
+    ) -> tuple[list[str], Any | str, Any | str] | tuple[
+        Any | str, Any | str, Any | str
+    ] | None:
+        """list buckets and objects.
+
+        Args:
+            path (str): Objects path.
+            detail (bool, optional): Return list of objects or list with
+                objects and object information. Defaults to False.
+            only_objects (bool, optional): Return only objects or also paths. Defaults to True.
+            recursive (bool, optional): Recursive. Defaults to False.
+            global_options (str | None, optional): global options. Defaults to "--json --stat".
+            operation_options (str | None, optional): operation specific options. Defaults to None.
+
+        Returns:
+            tuple[list[str], Any | str, Any | str] | tuple[ Any | str, Any | str, Any | str ] | None: _description_
+        """
+        if not path.startswith("s3"):
+            path = "s3://" + path
+        res, stat, err = self._s5.ls(
+            path=path,
+            detail=detail,
+            only_objects=only_objects,
+            recursive=recursive,
+            global_options=global_options,
+            operation_options=operation_options,
+        )
+        if only_res:
+            return res
+        return res, stat, err
+
+    def s5cp(
+        self,
+        src: str | Path,
+        dest: str | Path,
+        global_options: str | None = "--json --stat",
+        operation_options: str | None = None,
+        only_res: bool = True,
+    ) -> tuple[Any | str, Any | str, Any | str]:
+        """Copy objects.
+
+        Run `print_help("cp")` for more information.
+
+        Args:
+            src (str | Path): Source path.
+            dest (str | Path): Destination path.
+            global_options (str | None, optional): global options. Defaults to "--json --stat".
+            operation_options (str | None, optional): operation specific options. Defaults to None.
+
+        Returns:
+            tuple[Any | str, Any | str, Any | str]: Operation output.
+        """
+        res, stat, err = self._s5.cp(
+            src=src,
+            dest=dest,
+            global_options=global_options,
+            operation_options=operation_options,
+        )
+        if only_res:
+            return res
+        return res, stat, err
+
+    def s5sync(
+        self,
+        src: str | Path,
+        dest: str | Path,
+        global_options: str | None = "--json --stat",
+        operation_options: str | None = None,
+        only_res: bool = True,
+    ) -> tuple[Any | str, Any | str, Any | str]:
+        """Sync objects.
+
+        Run `print_help("sync")` for more information.
+
+        Args:
+            src (str | Path): Source path.
+            dest (str | Path): Destination path.
+            global_options (str | None, optional): global options. Defaults to "--json --stat".
+            operation_options (str | None, optional): operation specific options. Defaults to None.
+
+        Returns:
+            tuple[Any | str, Any | str, Any | str]: Operation output.
+        """
+        res, stat, err = self._s5.sync(
+            src=src,
+            dest=dest,
+            global_options=global_options,
+            operation_options=operation_options,
+        )
+        if only_res:
+            return res
+        return res, stat, err
+
+    def s5rm(
+        self,
+        path: str | Path,
+        global_options: str | None = "--json --stat",
+        operation_options: str | None = None,
+        recursive: bool = False,
+        only_res: bool = True,
+    ) -> tuple[Any | str, Any | str, Any | str]:
+        """Remove objects.
+
+        Run `print_help("rm")` for more information.
+
+        Args:
+            path (str | Path): Objects path.
+            global_options (str | None, optional): global options. Defaults to "--json --stat".
+            operation_options (str | None, optional): operation specific options. Defaults to None.
+            recursive (bool, optional): Recursive. Defaults to False.
+
+        Returns:
+            tuple[Any | str, Any | str, Any | str]: Operation output.
+        """
+        res, stat, err = self._s5.rm(
+            path=path,
+            global_options=global_options,
+            operation_options=operation_options,
+            recursive=recursive,
+        )
+        if only_res:
+            return res
+        return res, stat, err
+
+    def s5mv(
+        self,
+        src: str | Path,
+        dest: str | Path,
+        global_options: str | None = "--json --stat",
+        operation_options: str | None = None,
+        only_res: bool = True,
+    ) -> tuple[Any | str, Any | str, Any | str]:
+        """Move/rename objects.
+
+        Run `print_help("mv")` for more information.
+
+        Args:
+            src (str | Path): Source path.
+            dest (str | Path): Destination path.
+            global_options (str | None, optional): global options. Defaults to "--json --stat".
+            operation_options (str | None, optional): operation specific options. Defaults to None.
+
+        Returns:
+            tuple[Any | str, Any | str, Any | str]: Operation output.
+        """
+        res, stat, err = self._s5.mv(
+            src=src,
+            dest=dest,
+            global_options=global_options,
+            operation_options=operation_options,
+        )
+        if only_res:
+            return res
+        return res, stat, err
+
+    def s5mb(
+        self,
+        bucket: str | Path,
+        global_options: str | None = "--json --stat",
+        only_res: bool = True,
+    ) -> tuple[Any | str, Any | str, Any | str]:
+        """Make bucket.
+
+        Run `print_help("mb")` for more information.
+
+        Args:
+            bucket (str | Path): Bucket name.
+            global_options (str | None, optional): global options. Defaults to "--json --stat".
+
+        Returns:
+            tuple[Any | str, Any | str, Any | str]: Operation output.
+        """
+        res, stat, err = self._s5.mb(bucket=bucket, global_options=global_options)
+        if only_res:
+            return res
+        return res, stat, err
+
+    def s5rb(
+        self,
+        bucket: str | Path,
+        global_options: str | None = "--json --stat",
+        only_res: bool = True,
+    ) -> tuple[Any | str, Any | str, Any | str]:
+        """Remove bucket.
+
+        Run `print_help("rb")` for more information.
+
+        Args:
+            bucket (str | Path): Bucket name.
+            global_options (str | None, optional): global options. Defaults to "--json --stat".
+
+        Returns:
+            tuple[Any | str, Any | str, Any | str]: Operation output
+        """
+        res, stat, err = self._s5.rb(bucket=bucket, global_options=global_options)
+        if only_res:
+            return res
+        return res, stat, err
+
+    def s5du(
+        self,
+        path: str | Path,
+        global_options: str | None = "--json --stat",
+        operation_options: str | None = "-H",
+        recursive: bool = False,
+        only_res: bool = True,
+    ) -> tuple[Any | str, Any | str, Any | str]:
+        """Show object size(s) usage.
+
+        Run `print_help("du")` for more information.
+
+        Args:
+            path (str | Path): Object path(s).
+            global_options (str | None, optional): global options. Defaults to "--json --stat".
+            operation_options (str | None, optional): operation specific options. Defaults to "-H".
+            recursive (bool, optional): Recursive. Defaults to False.
+
+        Returns:
+            tuple[Any | str, Any | str, Any | str]: Object size(s) usage.
+        """
+        res, stat, err = self._s5.du(
+            path=path,
+            global_options=global_options,
+            operation_options=operation_options,
+            recursive=recursive,
+        )
+        if only_res:
+            return res
+        return res, stat, err
+
+    def s5cat(
+        self, object: str | Path, only_res: bool = True
+    ) -> tuple[Any | str, Any | str, Any | str]:
+        """Print remote object content
+
+        Run `print_help("cat")` for more information.
+
+        Args:
+            object (str | Path): Object path.
+
+        Returns:
+            tuple[Any | str, Any | str, Any | str]: Object content.
+        """
+        res, stat, err = self._s5.cat(object=object)
+        if only_res:
+            return res
+        return res, stat, err
+
+    def s5run(
+        self, filename: str | Path, only_res: bool = True
+    ) -> tuple[Any | str, Any | str, Any | str]:
+        """Run commands in batch
+
+        Run `print_help("run")` for more information.
+
+        Args:
+            filename (str | Path): Name of the file with the commands to run in parallel.
+
+        Returns:
+            tuple[Any | str, Any | str, Any | str]: response of the commands
+        """
+        res, stat, err = self._s5.run(filename=filename)
+        if only_res:
+            return res
+        return res, stat, err

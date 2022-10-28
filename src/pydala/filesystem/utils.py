@@ -35,7 +35,7 @@ class S5CMD(AwsCredentialsManager):
         if "s3" in path:
             path = path.lstrip("s3").lstrip(":").lstrip("/")
 
-            if self._bucket is not None:
+            if self._bucket is not None and self._bucket not in path:
                 path = os.path.join(self._bucket, path)
 
             if not path.startswith("s3"):

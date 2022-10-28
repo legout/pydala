@@ -8,8 +8,8 @@ import pyarrow.dataset as ds
 import pyarrow.feather as pf
 import pyarrow.parquet as pq
 from tempfile import mkdtemp
-from ..filesystem import FileSystem, S5CMD
-from ..utils import (
+from ..filesystem.filesystem import FileSystem as FileSystem_
+from .utils import (
     distinct_table,
     get_ddb_sort_str,
     drop_columns,
@@ -27,122 +27,145 @@ class Reader:
         bucket: str | None = None,
         name: str | None = None,
         partitioning: ds.Partitioning | str | None = None,
-        filesystem: FileSystem,
+        filesystem: FileSystem_ | None = None,
         format: str | None = "parquet",
         sort_by: str | list | None = None,
         ascending: bool | list | None = None,
         distinct: bool | None = None,
         drop: str | list | None = "__index_level_0__",
         ddb: duckdb.DuckDBPyConnection | None = None,
-        caching:bool=False,
-        cache_prefix:str|None="/tmp/pydala",
-        
+        caching: bool = False,
+        cache_prefix: str | None = "/tmp/pydala/",
     ):
-        self._bucket = bucket
         self._name = name
 
-        self._path = os.path.join(bucket, path) if bucket is not None else path
-        self._path_org = self._path
-            
-        self._filesystem = filesystem
+        self._set_filesystems(
+            filesystem=filesystem,
+            bucket=bucket,
+            caching=caching,
+        )
+        self._set_paths(
+            path=path, bucket=bucket, caching=caching, cache_prefix=cache_prefix
+        )
         self._format = format
         self._partitioning = partitioning
-        self.sort(by=sort_by, ascending=ascending)
-        self.distinct(distinct)
-        self.drop(columns=drop)
+        _ = self.sort(by=sort_by, ascending=ascending)
+        _ = self.distinct(distinct)
+        _ = self.drop(columns=drop)
 
-        self._caching = caching
-        self._has_local = False
-        self._cache_prefix = cache_prefix
-        if cache_prefix is not None:
-            os.makedirs(cache_prefix, exist_ok=True)
-            self._cache_path =  mkdtemp(prefix=cache_prefix)
-        else:
-            self._cache_path = mkdtemp()
         if ddb is not None:
             self.ddb = ddb
         else:
             self.ddb = duckdb.connect()
         self.ddb.execute(f"SET temp_directory='{cache_prefix}'")
-
         self._tables = dict()
+        self._cached = False
 
-    def _gen_name(self, name: str):
-        return f"{self._name}_{name}" if self._name is not None else name
+    def _set_paths(
+        self, path: str, bucket: str | None, caching: bool, cache_prefix: str | None
+    ):
+        self._bucket = bucket or self._bucket
+        self._path = os.path.join(bucket, path) if bucket is not None else path
+        self._path_org = self._path
+        self._caching = caching
+        self._cache_prefix = cache_prefix
+        if self._caching:
+
+            if cache_prefix is not None:
+                os.makedirs(cache_prefix, exist_ok=True)
+                self._cache_path = mkdtemp(prefix=cache_prefix)
+            else:
+                self._cache_path = mkdtemp()
+
+    def _set_filesystems(
+        self, filesystem: FileSystem_ | None, bucket: str | None, caching: bool
+    ):
+        self._filesystem = filesystem or FileSystem_(
+            type_="local", bucket=bucket, use_s5cmd=False
+        )
+        self._filesystem_org = filesystem
+        if caching:
+            self._cache_filesystem = FileSystem_(
+                type_="local", bucket=bucket, use_s5cmd=False
+            )
+        self._bucket = bucket or self._filesystem._bucket
 
     def sort(self, by: str | list | None, ascending: bool | list | None = None):
         self._sort_by = by
-        
+
         if ascending is None:
             ascending = True
-        self._ascending = ascending 
-        
+        self._ascending = ascending
+
         if self._sort_by is not None:
             self._sort_by_ddb = get_ddb_sort_str(sort_by=by, ascending=ascending)
-        
+
         return self
 
     def distinct(self, value: bool | None):
         if value is None:
             value = False
         self._distinct = value
-            
+
         return self
 
     def drop(self, columns: str | list | None):
         self._drop = columns
         return self
-        
+
+    def _gen_name(self, name: str | None):
+        return f"{self._name}_{name}" if self._name is not None else name
+
     def _to_cache(self):
-        s5 = S5CMD()
-        copy_to_tmp_directory(
-                src=self._path_org,
-                dest=self._path_cache,
-                filesystem=self._filesystem,
-            )
-        
-        self._path = self._path_cache
+        if self._filesystem._has_s5cmd:
+            self._filesystem.s5sync("s3:" + self._path_org, self._cache_path)
+        else:
+            self._filesystem.get(self._path_org, self._cache_path, recursive=True)
+        self._path = self._cache_path
+        self._filesystem = self._cache_filesystem
         self._cached = True
 
-    
-
     def _load_feather(self, **kwargs):
-        if self._path_exists:
-            if self._is_file:
-                if self._filesystem is not None:
-                    with open_(self._path, self._filesystem) as f:
-                        self._mem_table = pf.read_feather(f, **kwargs)
-                else:
-                    self._mem_table = pf.read_feather(self._path, **kwargs)
+        if self._filesystem.exists(self._path):
+            if self._filesystem.isfile(self._path):
+
+                with self._filesystem.open(self._path) as f:
+                    self._mem_table = pf.read_feather(f, **kwargs)
+
             else:
                 if not hasattr(self, "_dataset"):
                     self.set_dataset()
                 self._mem_table = self._dataset.to_table(**kwargs)
+        else:
+            raise FileNotFoundError(f"{self._path} not found.")
 
     def _load_parquet(self, **kwargs):
-        if self._path_exists:
+        if self._filesystem.exists(self._path):
+
             self._mem_table = pq.read_table(
                 self._path,
                 partitioning=self._partitioning,
-                filesystem=self._filesystem,
+                filesystem=self._filesystem._fs,
                 **kwargs,
             )
+        else:
+            raise FileNotFoundError(f"{self._path} not found.")
 
     def _load_csv(self, **kwargs):
 
         pass
-    
-    def set_dataset(self, name: str = "dataset", **kwargs):
-        if self._caching and not self._cached:
-            self._to_cache()
-            
-        name = self._gen_name(name)
 
-        if self._path_exists:
+    def set_dataset(self, name: str = "dataset", **kwargs):
+        if self._caching and not self.cached:
+            self._to_cache()
+
+        name = self._gen_name(name=name)
+
+        if self._filesystem.exists(self._path):
             self._dataset = ds.dataset(
                 source=self._path,
                 format=self._format,
-                filesystem=self._filesystem,
+                filesystem=self._filesystem._fs,
                 partitioning=self._partitioning,
                 **kwargs,
             )
@@ -150,6 +173,8 @@ class Reader:
             # self._dataset = name
             self._tables["dataset"] = name
             self.ddb.register(name, self._dataset)
+        else:
+            raise FileNotFoundError(f"{self._path} not found.")
 
     def load_mem_table(
         self,
@@ -160,10 +185,10 @@ class Reader:
         drop: str | list | None = None,
         **kwargs,
     ):
-        if self._caching and not self._cached:
+        if self._caching and not self.cached:
             self._to_cache()
-            
-        name = self._gen_name(name)
+
+        name = self._gen_name(name=name)
 
         if sort_by is not None:
             self.sort(by=sort_by, ascending=ascending)
@@ -198,7 +223,6 @@ class Reader:
 
         self._tables["mem_table"] = name
         self.ddb.register(name, self._mem_table)
-                          
 
     def create_temp_table(
         self,
@@ -208,10 +232,10 @@ class Reader:
         distinct: bool = False,
         drop: str | list | None = None,
     ):
-        if self._caching and not self._cached:
+        if self._caching and not self.cached:
             self._to_cache()
-            
-        name = self._gen_name(name)
+
+        name = self._gen_name(name=name)
 
         if sort_by is not None:
             self.sort(by=sort_by, ascending=ascending)
@@ -268,9 +292,9 @@ class Reader:
         distinct: bool = False,
         drop: str | list | None = None,
     ):
-        if self._caching and not self._cached:
+        if self._caching and not self.cached:
             self._to_cache()
-            
+
         if sort_by is not None:
             self.sort(by=sort_by, ascending=ascending)
 
@@ -328,9 +352,9 @@ class Reader:
         distinct: bool | None = None,
         drop: str | list | None = None,
     ):
-        if self._caching and not self._cached:
+        if self._caching and not self.cached:
             self._to_cache()
-            
+
         self.sort(by=sort_by, ascending=ascending)
         self.drop(drop)
 
@@ -383,9 +407,9 @@ class Reader:
         distinct: bool | None = None,
         drop: str | list | None = None,
     ):
-        if self._caching and not self._cached:
+        if self._caching and not self.cached:
             self._to_cache()
-            
+
         self.sort(by=sort_by, ascending=ascending)
         self.drop(drop)
 
@@ -438,7 +462,7 @@ class Reader:
         return self.ddb.query(*args, **kwargs)
 
     @property
-    def dataset(self) -> ds.FileSystemDataset:
+    def dataset(self) -> ds.FileSystem_Dataset:
         if not self.has_dataset:
             self.set_dataset()
 
@@ -465,7 +489,7 @@ class Reader:
             self.to_relation()
 
         return self._rel
-    
+
     @property
     def table(self) -> duckdb.DuckDBPyRelation:
         if not self.has_relation:
@@ -508,7 +532,7 @@ class Reader:
     @property
     def has_pd_dataframe(self) -> bool:
         return hasattr(self, "_pd_dataframe")
-    
+
     @property
-    def has_local(self) -> bool:
-        return self._has_local
+    def cached(self) -> bool:
+        return self._cached
