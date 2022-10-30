@@ -1,0 +1,32 @@
+[dataset]
+name = "symbols"
+desciption = ""
+path = "/path/to/dataset"
+bucket = ""
+
+[timefly.current]
+created = 2022-10-20T10:12:01+02:00
+partition_names = ["type", "exchange"]
+format = "parquet"
+sort_by = "time"
+ascending = true
+compression = "zstd"
+distinct = true
+columns = ["A", "BC"]
+batches = 1e6
+
+[timefly.20221001_130513]
+created = 2022-10-01T13:05:13+02:00
+partition_names = ["type", "exchange"]
+format = "parquet"
+sort_by = "time"
+ascending = true
+compression = "zstd"
+distinct = true
+columns = ["A", "BC"]
+batches = "3M"
+
+
+[timefly.history]
+available = ["current", "20221001_130513"]
+deleted = ["20220930_010535", "20220920_164523"]
