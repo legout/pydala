@@ -1,23 +1,18 @@
-import uuid
-import duckdb
 import os
+from tempfile import mkdtemp
+
+import duckdb
 import pandas as pd
 import polars as pl
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.feather as pf
 import pyarrow.parquet as pq
-from tempfile import mkdtemp
-from ..filesystem.filesystem import FileSystem as FileSystem_
-from .utils import (
-    distinct_table,
-    get_ddb_sort_str,
-    drop_columns,
-    sort_table,
-    to_pandas,
-    to_polars,
-    to_relation,
-)
+import s3fs
+
+from ..filesystem.filesystem import FileSystem
+from .utils import (distinct_table, drop_columns, get_ddb_sort_str, sort_table,
+                    to_pandas, to_polars, to_relation)
 
 
 class Reader:
@@ -27,7 +22,7 @@ class Reader:
         bucket: str | None = None,
         name: str | None = None,
         partitioning: ds.Partitioning | str | None = None,
-        filesystem: FileSystem_ | None = None,
+        filesystem: FileSystem | None = None,
         format: str | None = "parquet",
         sort_by: str | list | None = None,
         ascending: bool | list | None = None,
@@ -78,14 +73,14 @@ class Reader:
                 self._cache_path = mkdtemp()
 
     def _set_filesystems(
-        self, filesystem: FileSystem_ | None, bucket: str | None, caching: bool
+        self, filesystem: FileSystem | None, bucket: str | None, caching: bool
     ):
-        self._filesystem = filesystem or FileSystem_(
+        self._filesystem = filesystem or FileSystem(
             type_="local", bucket=bucket, use_s5cmd=False
         )
         self._filesystem_org = filesystem
         if caching:
-            self._cache_filesystem = FileSystem_(
+            self._cache_filesystem = FileSystem(
                 type_="local", bucket=bucket, use_s5cmd=False
             )
         self._bucket = bucket or self._filesystem._bucket
@@ -264,21 +259,20 @@ class Reader:
 
             sql = f"CREATE OR REPLACE TEMP TABLE {name} AS  SELECT * FROM {self._tables['dataset']}"
 
-            if sort_by is not None:
+            if self._sort_by is not None:
 
-                sort_by = get_ddb_sort_str(sort_by=sort_by, ascending=ascending)
+                sort_by = get_ddb_sort_str(sort_by=self._sort_by, ascending=self._ascending)
 
                 sql += f" ORDER BY {sort_by}"
 
-            if drop is not None:
+            if self._drop is not None:
                 if isinstance(drop, str):
                     drop = [drop]
-                    drop = [col for col in drop if col in self._dataset.schema.names]
+                drop = [col for col in drop if col in self._dataset.schema.names]
 
                 sql = sql.replace("SELECT *", f"SELECT * exclude({','.join(drop)})")
 
-            if distinct:
-                self.distinct(distinct)
+            if self._distinct:
                 sql = sql.replace("SELECT *", "SELECT DISTINCT *")
 
         self._tables["temp_table"] = name
@@ -462,7 +456,7 @@ class Reader:
         return self.ddb.query(*args, **kwargs)
 
     @property
-    def dataset(self) -> ds.FileSystem_Dataset:
+    def dataset(self) -> ds.FileSystemDataset:
         if not self.has_dataset:
             self.set_dataset()
 

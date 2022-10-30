@@ -1,3 +1,5 @@
+import datetime as dt
+import os
 import uuid
 from pathlib import Path
 
@@ -11,36 +13,55 @@ import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 import s3fs
 
-from .utils import to_relation
+from ..filesystem.filesystem import FileSystem
+from .utils import get_ddb_sort_str, to_relation
 
 
 class Writer:
     def __init__(
         self,
         path: str,
+        bucket: str | None = None,
         base_name: str = "data",
         partitioning: ds.Partitioning | list | str | None = None,
-        filesystem: pafs.FileSystem | s3fs.S3FileSystem | None = None,
+        filesystem: FileSystem | None = None,
         format: str | None = "parquet",
         compression: str | None = "zstd",
         sort_by: str | list | None = None,
-        ascending: str | list | None = None,
+        ascending: bool | list | None = None,
+        distinct: bool | None = None,
+        drop: str | list | None = "__index_level_0__",
         ddb: duckdb.DuckDBPyConnection | None = None,
+        cache_prefix: str | None = "/tmp/pydala/",
     ):
+
+        self._set_filesystems(filesystem=filesystem, bucket=bucket)
+
         self._path = path
         self._base_name = base_name
         self._partitioning = (
             [partitioning] if isinstance(partitioning, str) else partitioning
         )
-        self._filesystem = filesystem
+
         self._format = format
         self._compression = compression
-        self._sort_by = sort_by
+        _ = self.sort(by=sort_by, ascending=ascending)
+        _ = self.distinct(value=distinct)
+        _ = self.drop(columns=drop)
+
         if ddb is not None:
             self.ddb = ddb
         else:
             self.ddb = duckdb.connect()
-        self.ddb.execute("SET temp_directory='/tmp/duckdb/'")
+        self.ddb.execute(f"SET temp_directory='{cache_prefix}'")
+        self._tables = dict()
+
+    def _set_filesystems(self, filesystem: FileSystem | None, bucket: str | None):
+        self._filesystem = filesystem or FileSystem(
+            type_="local", bucket=bucket, use_s5cmd=False
+        )
+        self._filesystem_org = filesystem
+        self._bucket = bucket or self._filesystem._bucket
 
     def _gen_path(
         self,
@@ -48,29 +69,98 @@ class Writer:
         partition_names: tuple | None = None,
         with_time_partition: bool = False,
     ):
+        
         path = Path(path)
         if path.suffix != "":
-            parts = [path.parent]
+            path = path.parent
+            name = path.suffix
         else:
-            parts = [path]
+            name = None
 
         if partition_names is not None:
-            parts.extend(partition_names)
+            path = os.path.join(path, *partition_names)
 
         if with_time_partition:
-            parts.append(str(dt.datetime.today()))
+            path = os.path.join(path, dt.datetime.now().strftime("%Y%m%d_%H%M%S"))
+        
 
-        if path.suffix == "":
-            parts.append(self._base_name + f"-{uuid.uuid4().hex}.{self._format}")
-        else:
-            parts.append(path.suffix)
+        if name is None:
+            name = f"{self._base_name}-{uuid.uuid4().hex}.{self._format}"
+        
+        path = os.path.join(path, name)
 
-        path = Path(*parts)
-
-        if self._filesystem is None:
+        if self._filesystem._type == "local" or self._filesystem._type==None:
             path.mkdir.parent(exist_ok=True, parents=True)
+        
 
         return path
+
+    def _add_table(
+        self,
+        table: duckdb.DuckDBPyRelation
+        | pa.Table
+        | ds.FileSystemDataset
+        | pd.DataFrame
+        | pl.DataFrame
+        | str,
+        sort_by: str | list | None = None,
+        ascending: bool | list | None = None,
+        distinct: bool | None = None,
+        drop: str | list| None = None,
+    ):
+
+        self.sort(by=sort_by, ascending=ascending)
+        self.distinct(value=distinct)
+        self.drop(columns=drop)
+
+        self._table = to_relation(
+            table=table,
+            ddb=self.ddb,
+            sort_by=self._sort_by,
+            ascending=self._ascending,
+            distinct=self._distinct,
+            drop=self._drop,
+        )
+
+    def _get_partition_filters(self):
+
+        filters = []
+        all_partitions = (
+            self._table.project(",".join(self._partitioning)).distinct().fetchall()
+        )
+
+        for partition_names in all_partitions:
+
+            filter_ = []
+            for p in zip(self._partitioning, partition_names):
+                filter_.append(f"{p[0]}='{p[1]}'")
+
+            filters.append(" AND ".join(filter_))
+
+        return filters
+
+    def sort(self, by: str | list | None, ascending: bool | list | None = None):
+        self._sort_by = by
+
+        if ascending is None:
+            ascending = True
+        self._ascending = ascending
+
+        if self._sort_by is not None:
+            self._sort_by_ddb = get_ddb_sort_str(sort_by=by, ascending=ascending)
+
+        return self
+
+    def distinct(self, value: bool | None):
+        if value is None:
+            value = False
+        self._distinct = value
+
+        return self
+
+    def drop(self, columns: str | list | None):
+        self._drop = columns
+        return self
 
     def write_table(
         self,
@@ -133,6 +223,7 @@ class Writer:
         sort_by: str | list | None = None,
         ascending: bool | list | None = None,
         distinct: bool = False,
+        drop:str|list|None=None,
         rows_per_file: int | None = None,
         row_group_size: int | None = None,
         with_time_partition: bool = False,
@@ -146,43 +237,25 @@ class Writer:
 
         if compression is not None:
             self._compression = compression
-        e
-
-        if sort_by is not None:
-            self._sort_by = sort_by
-
-        if ascending is not None:
-            self._ascending = ascending
-
-        table = to_ddb_relation(
-            table=table,
-            ddb=self.ddb,
-            sort_by=self._sort_by,
-            ascending=self._ascending,
-            distinct=distinct,
-        )
 
         if partitioning is not None:
             if isinstance(partitioning, str):
                 partitioning = [partitioning]
-        else:
-            partitioning = (
-                self._partitioning
-                if isinstance(self._partitioning, list)
-                else [self._partitioning]
-            )
+            self._partitioning = partitioning
 
-        if partitioning is not None:
-            partitions = table.project(",".join(partitioning)).distinct().fetchall()
+        self._add_table(
+            table=table,
+            sort_by=sort_by,
+            ascending=ascending,
+            distinct=distinct,
+            drop=drop,
+        )
 
-            for partition_names in partitions:
+        if self._partitioning is not None:
+            partition_filters = self._get_partition_filters()
 
-                filter_ = []
-                for p in zip(partitioning, partition_names):
-                    filter_.append(f"{p[0]}='{p[1]}'")
-                filter_ = " AND ".join(filter_)
-
-                table_part = table.filter(filter_)
+            for partition_filter in partition_filters:
+                table_part = table.filter(partition_filter)
 
                 if rows_per_file is None:
 

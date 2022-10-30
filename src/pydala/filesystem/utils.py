@@ -16,8 +16,11 @@ class S5CMD(AwsCredentialsManager):
         bucket: str | None = None,
         profile: str = "default",
         credentials: str | Path | dict[str, str] = "~/.aws/credentials",
+        endpoint_url:str|None=None
     ) -> None:
         super().__init__(profile=profile, credentials=credentials)
+        if endpoint_url is not None:
+            os.environ["S3_ENDPOINT_URL"] = endpoint_url
         if bucket is not None:
             self._bucket = bucket if bucket.startswith("s3://") else f"s3://{bucket}"
         else:

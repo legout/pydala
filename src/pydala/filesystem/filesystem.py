@@ -19,6 +19,10 @@ class FileSystem:
         filesystem: fs_type = None,
         credentials: dict | None = None,
         bucket: str | None = None,
+        access_key: str | None = None,
+        secret_key: str | None = None,
+        endpoint_url: str | None = None,
+        session_token: str | None = None,
         use_s5cmd: bool = True,
     ) -> None:
         self._bucket = bucket
@@ -27,7 +31,8 @@ class FileSystem:
 
         if credentials is not None:
             self.set_aws_env(**credentials)
-        else:
+
+        if aws_profile is not None:
             self.set_aws_profile(aws_profile)
 
         if type_ is not None and filesystem is None:
@@ -38,7 +43,13 @@ class FileSystem:
                 self._filesystem = local.LocalFileSystem(self._fs)
 
             elif self._type == "s3":
-                self._filesystem = s3fs.S3FileSystem(anon=False)
+                self._filesystem = s3fs.S3FileSystem(
+                    anon=False,
+                    key=access_key,
+                    secret=secret_key,
+                    token=session_token,
+                    client_kwargs=dict(endpoint_url=endpoint_url),
+                )
                 self._fs = self._filesystem
 
             else:
@@ -77,7 +88,9 @@ class FileSystem:
             raise ValueError("type_ or filesystem must not be None.")
 
         if self._type == "s3" and use_s5cmd and S5CMD._check_for_s5cmd():
-            self._s5 = S5CMD(bucket=bucket, profile=aws_profile)
+            self._s5 = S5CMD(
+                bucket=bucket, profile=aws_profile, endpoint_url=endpoint_url
+            )
             self._has_s5cmd = True
 
     def _gen_path(self, path: str) -> str:
@@ -460,12 +473,11 @@ class FileSystem:
         -------
         List of strings if detail is False, or list of directory information
         dicts if detail is True."""
-        
+
         res = self._filesystem.ls(self._gen_path(path), detail=detail, **kwargs)
         if detail:
             return res
         return self._strip_paths(res)
-
 
     def makedir(self, path: str, create_parents: bool = True, **kwargs):
         self._filesystem.makedir(

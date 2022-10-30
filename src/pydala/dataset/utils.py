@@ -309,6 +309,7 @@ def drop_columns(
 ) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
     if columns is not None:
         if isinstance(table, (pa.Table, pl.DataFrame, pd.DataFrame)):
+            columns = [col for col in columns if col in table.column_names]
             return table.drop(columns=columns)
 
         elif isinstance(table, ds.FileSystemDataset):
