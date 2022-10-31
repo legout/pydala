@@ -9,13 +9,18 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.feather as pf
 import pyarrow.parquet as pq
-import pytz
-import s3fs
 import toml
 
 from ..filesystem.filesystem import FileSystem
-from .utils import (distinct_table, drop_columns, get_ddb_sort_str, sort_table,
-                    to_pandas, to_polars, to_relation)
+from .utils import (
+    distinct_table,
+    drop_columns,
+    get_ddb_sort_str,
+    sort_table,
+    to_pandas,
+    to_polars,
+    to_relation,
+)
 
 
 class Reader:

@@ -1,17 +1,9 @@
-from re import S
 import duckdb
-import pandas as pd
-import polars as pl
-import pyarrow as pa
-import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 import s3fs
-import uuid
 
+# from ..filesystem import delete, path_exists
 from .reader import Reader
-from .writer import Writer
-from ..filesystem import path_exists, delete
-from ..utils import get_tables_diff
 
 
 class Repartition:
@@ -41,7 +33,7 @@ class Repartition:
         with_temp_table: bool = False,
         with_mem_table: bool = False,
         to_local: bool = False,
-        tmp_path:str="/tmp/duckdb",
+        tmp_path: str = "/tmp/duckdb",
         delete_after: bool = False,
         reader_kwargs: dict | None = None,
         writer_kwargs: dict | None = None,
@@ -73,15 +65,13 @@ class Repartition:
         self.ddb = duckdb.connect()
         self.ddb.execute(f"SET temp_directory='{tmp_path}'")
 
-
-    def _set_reader_writer_params(value:str|list|tuple|dict):
+    def _set_reader_writer_params(value: str | list | tuple | dict):
         if isinstance(value, dict):
             return value
-        elif isinstance(value, (list,tuple)):
+        elif isinstance(value, (list, tuple)):
             return dict(reader=value[0], writer=value[1])
         else:
             return dict(reader=value, writer=value)
-        
 
     def set_reader(
         self,
@@ -98,13 +88,13 @@ class Repartition:
             ascending=self._ascending,
             distinct=self._distinct,
             drop=self._drop,
-            to_local=self._to_local
-            tmp_path=self._tmp_path
-            ddb=self.ddb            
+            to_local=self._to_local,
+            tmp_path=self._tmp_path,
+            ddb=self.ddb,
         )
         if path_exists(self._dest, self._filesystem["writer"]):
-            
-            self.dest_reader =  Reader(
+
+            self.dest_reader = Reader(
                 path=self._dest,
                 bucket=self._bucket,
                 name="dest",
@@ -115,9 +105,9 @@ class Repartition:
                 ascending=self._ascending,
                 distinct=self._distinct,
                 drop=self._drop,
-                to_local=self._to_local
-                tmp_path=self._tmp_path
-                ddb=self.ddb            
+                to_local=self._to_local,
+                tmp_path=self._tmp_path,
+                ddb=self.ddb,
             )
 
         if self._with_temp_table:
@@ -128,10 +118,12 @@ class Repartition:
                 drop=self._drop,
             )
             if hasattr(self, "dest_reader"):
-                self.dest_reader.create_temp_table(sort_by=self._sort_by,
+                self.dest_reader.create_temp_table(
+                    sort_by=self._sort_by,
                     ascending=self._ascending,
                     distinct=self._distinct,
-                    drop=self._drop,)
+                    drop=self._drop,
+                )
 
         if self._with_mem_table:
             self.src_reader.load_mem_table(
@@ -149,19 +141,15 @@ class Repartition:
                     drop=self._drop,
                     **kwargs,
                 )
-                
-    
+
     def distinct(self):
         if path_exists(self._dest, filesystem=self._filesystem["writer"]):
 
             if self._append:
-                
-        
+                ...
+
             else:
                 delete(self._dist, filesystem=self._filesystem["writer"])
-            
-                
-
 
 
 # def repartition(

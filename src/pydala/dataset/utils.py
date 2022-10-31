@@ -3,7 +3,6 @@ import pandas as pd
 import polars as pl
 import pyarrow as pa
 import pyarrow.dataset as ds
-import duckdb
 
 
 def get_ddb_sort_str(sort_by: str | list, ascending: bool | list | None = None) -> str:

@@ -1,24 +1,58 @@
 [tool.poetry]
 name = "pydala"
 version = "0.1.0"
-description = ""
+description = "Poor man's simple python api for creating a local or remote datalake based on several (pyarrow) datasets using duckdb"
 authors = ["Volker Lorrmann <volker.lorrmann@gmail.com>"]
 readme = "README.md"
 packages = [{include = "pydala", from = "src"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"
-pathlib = "^1.0.1"
-duckdb = "^0.5.1"
-pandas = "1.5.1"
-polars = "0.14.24"
-joblib = "^1.2.0"
-s3fs = "2022.10.0"
-pyarrow = "10.0.0"
-fsspec = "^2022.8.2"
-toml = "^0.10.2"
+# pathlib = "^1.0.1" # pathlib is a python core module since version 3.4
+duckdb = ">=0.5.1"
+pandas = ">=1.5.1"
+polars = ">=0.14.24"
+joblib = ">=1.2.0"
+s3fs = ">=2022.10.0"
+pyarrow = ">=10.0.0"
+fsspec = ">=2022.8.2"
+toml = ">=0.10.2"
 
+[tool.poetry.dev-dependencies]
+pytest = "*"
+black = "*"
+flake8 = "*"
+isort = "*"
+coverage = "*"
+pytest-cov = "*"
+codecov = "*"
+mypy = "*"
+gitchangelog = "*"
+mkdocs = "*"
+pre-commit = "*"
+poetry-dynamic-versioning = "*"
+mkdocstrings = {extras = ["python"], version = "^0.19.0"}
+mkdocs-material = "*"
+mkdocs-gen-files = "*"
+mkdocs-literate-nav = "*"
+ipykernel = "*"
+
+[tool.poetry-dynamic-versioning]
+enable = true
+vcs = "git"
+style = "semver"
 
 [build-system]
-requires = ["poetry-core"]
+requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+include_trailing_comma = true
+use_parentheses = true
+
+[tool.black]
+line-length = 88
+include = '\.pyi?$'

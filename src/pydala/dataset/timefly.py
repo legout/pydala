@@ -3,15 +3,15 @@ import os
 
 import duckdb
 import pyarrow.dataset as ds
-import pytz
 import toml
-from writer import Writer
 
 from ..filesystem.filesystem import FileSystem
 from .reader import Reader
+from .writer import Writer
 
 
-class ConfigReader
+class ConfigReader:
+    ...
 
 
 class DatasetReader(Reader):
@@ -32,8 +32,10 @@ class DatasetReader(Reader):
         caching: bool = False,
         cache_prefix: str | None = "/tmp/pydala/",
     ):
-        
-        self._timefly = self._read_timefly(filesystem=filesystem, path=path, bucket=bucket)
+
+        self._timefly = self._read_timefly(
+            filesystem=filesystem, path=path, bucket=bucket
+        )
 
         if self._timefly is not None:
             subpath = self._find_timefly_subpath(timefly=timefly)
@@ -57,10 +59,12 @@ class DatasetReader(Reader):
             cache_prefix=cache_prefix,
         )
 
-    def _read_timefly(self, filesystem:FileSystem|None, path:str, bucket:str|None=None):
+    def _read_timefly(
+        self, filesystem: FileSystem | None, path: str, bucket: str | None = None
+    ):
         if filesystem is None:
             filesystem = FileSystem(type_="local")
-        
+
         bucket = bucket or ""
 
         if filesystem.exists(os.path.join(bucket, path, "timefly.toml")):

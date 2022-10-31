@@ -1,7 +1,6 @@
 import configparser
 import os
 from pathlib import Path
-from pdb import line_prefix
 
 
 class AwsCredentialsManager:
@@ -100,5 +99,3 @@ class AwsCredentialsManager:
 
     def set_profile(self, profile: str) -> None:
         self._export_env(profile=profile)
-
-

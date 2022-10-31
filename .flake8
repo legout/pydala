@@ -1,0 +1,20 @@
+[flake8]
+count = true
+statistics = true
+max-line-length = 88
+max-complexity = 10
+extend-ignore = """
+  E203,
+  E501,
+  W503,
+  W605,
+  C901,
+"""
+exclude = """
+  .git,
+  __pycache__,
+  *.egg-info,
+  .pytest_cache,
+  .mypy_cache,
+  .vscode,
+"""
