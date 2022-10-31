@@ -1,0 +1,21 @@
+site_name: PyDala
+
+theme:
+  name: "material"
+  # name: "readthedocs"
+
+plugins:
+- search  #
+- gen-files:
+    scripts:
+    - docs/gen_ref_pages.py  #
+- literate-nav:
+    nav_file: SUMMARY.md
+- mkdocstrings:
+    watch:
+    - src/pydala  #
+
+nav:
+  - PyDala: index.md
+  - Code Reference: reference/
+  - Contributing: contributing.md

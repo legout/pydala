@@ -9,9 +9,7 @@ import polars as pl
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.feather as pf
-import pyarrow.fs as pafs
 import pyarrow.parquet as pq
-import s3fs
 
 from ..filesystem.filesystem import FileSystem
 from .utils import get_ddb_sort_str, to_relation
@@ -69,7 +67,7 @@ class Writer:
         partition_names: tuple | None = None,
         with_time_partition: bool = False,
     ):
-        
+
         path = Path(path)
         if path.suffix != "":
             path = path.parent
@@ -82,16 +80,14 @@ class Writer:
 
         if with_time_partition:
             path = os.path.join(path, dt.datetime.now().strftime("%Y%m%d_%H%M%S"))
-        
 
         if name is None:
             name = f"{self._base_name}-{uuid.uuid4().hex}.{self._format}"
-        
+
         path = os.path.join(path, name)
 
-        if self._filesystem._type == "local" or self._filesystem._type==None:
+        if self._filesystem._type == "local" or self._filesystem._type == None:
             path.mkdir.parent(exist_ok=True, parents=True)
-        
 
         return path
 
@@ -106,7 +102,7 @@ class Writer:
         sort_by: str | list | None = None,
         ascending: bool | list | None = None,
         distinct: bool | None = None,
-        drop: str | list| None = None,
+        drop: str | list | None = None,
     ):
 
         self.sort(by=sort_by, ascending=ascending)
@@ -223,7 +219,7 @@ class Writer:
         sort_by: str | list | None = None,
         ascending: bool | list | None = None,
         distinct: bool = False,
-        drop:str|list|None=None,
+        drop: str | list | None = None,
         rows_per_file: int | None = None,
         row_group_size: int | None = None,
         with_time_partition: bool = False,

@@ -1,11 +1,8 @@
-from ensurepip import version
-from glob import glob
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
-import os
-import sys
 
 from .aws import AwsCredentialsManager
 
@@ -16,7 +13,7 @@ class S5CMD(AwsCredentialsManager):
         bucket: str | None = None,
         profile: str = "default",
         credentials: str | Path | dict[str, str] = "~/.aws/credentials",
-        endpoint_url:str|None=None
+        endpoint_url: str | None = None,
     ) -> None:
         super().__init__(profile=profile, credentials=credentials)
         if endpoint_url is not None:

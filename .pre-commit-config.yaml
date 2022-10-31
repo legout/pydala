@@ -1,0 +1,77 @@
+---
+exclude: '^docs/conf.py'
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.1.0
+    hooks:
+      - id: trailing-whitespace
+        stages: [commit]
+      - id: end-of-file-fixer
+        stages: [commit]
+      - id: check-yaml
+        stages: [commit]
+      - id: check-toml
+        stages: [commit]
+      - id: check-added-large-files
+        stages: [commit]
+
+  # - repo: https://github.com/markdownlint/markdownlint
+  #   rev: v0.11.0
+  #   hooks:
+  #     - id: markdownlint
+  #       stages: [commit]
+
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.26.3
+    hooks:
+      - id: yamllint
+        stages: [commit]
+        args:
+          - '-d {extends: relaxed, rules: {line-length: disable}}'
+
+  - repo: https://github.com/myint/autoflake
+    rev: v1.4
+    hooks:
+      - id: autoflake
+        stages: [commit]
+        args:
+          - --in-place
+          - --remove-all-unused-imports
+          - --expand-star-imports
+          - --remove-duplicate-keys
+          - --remove-unused-variables
+
+  - repo: https://github.com/PyCQA/isort
+    rev: 5.10.1
+    hooks:
+      - id: isort
+        name: isort (src)
+        files: 'src/.*'
+      - id: isort
+        name: isort (tests)
+        files: 'tests/.*'
+
+  - repo: https://github.com/psf/black
+    rev: 22.3.0
+    hooks:
+      - id: black
+        stages: [commit]
+
+  - repo: https://github.com/keewis/blackdoc
+    rev: v0.3.4
+    hooks:
+      - id: blackdoc
+        stages: [commit]
+
+  # - repo: https://github.com/pycqa/flake8
+  #   rev: 4.0.1
+  #   hooks:
+  #     - id: flake8
+  #       stages: [commit]
+
+  # - repo: https://github.com/pre-commit/mirrors-mypy
+  #   rev: v0.790
+  #   hooks:
+  #     - id: mypy
+  #       stages: [commit]
