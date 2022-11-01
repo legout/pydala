@@ -11,7 +11,7 @@ import pyarrow.dataset as ds
 import pyarrow.feather as pf
 import pyarrow.parquet as pq
 
-from ..filesystem.filesystem import FileSystem
+#from ..filesystem.filesystem import FileSystem
 from .utils import get_ddb_sort_str, to_relation
 
 
@@ -22,7 +22,7 @@ class Writer:
         bucket: str | None = None,
         base_name: str = "data",
         partitioning: ds.Partitioning | list | str | None = None,
-        filesystem: FileSystem | None = None,
+        filesystem: str | None = None,
         format: str | None = "parquet",
         compression: str | None = "zstd",
         sort_by: str | list | None = None,
@@ -54,7 +54,7 @@ class Writer:
         self.ddb.execute(f"SET temp_directory='{cache_prefix}'")
         self._tables = dict()
 
-    def _set_filesystems(self, filesystem: FileSystem | None, bucket: str | None):
+    def _set_filesystems(self, filesystem: str | None, bucket: str | None):
         self._filesystem = filesystem or FileSystem(
             type_="local", bucket=bucket, use_s5cmd=False
         )

@@ -9,9 +9,8 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.feather as pf
 import pyarrow.parquet as pq
-import toml
-
-from ..filesystem.filesystem import FileSystem
+from fsspec.utils import infer_storage_options
+from ..filesystem.filesystem import get_filesystem
 from .utils import (
     distinct_table,
     drop_columns,
@@ -30,7 +29,6 @@ class Reader:
         bucket: str | None = None,
         name: str | None = None,
         partitioning: ds.Partitioning | str | None = None,
-        filesystem: FileSystem | None = None,
         format: str | None = "parquet",
         sort_by: str | list | None = None,
         ascending: bool | list | None = None,
@@ -39,13 +37,23 @@ class Reader:
         ddb: duckdb.DuckDBPyConnection | None = None,
         caching: bool = False,
         cache_prefix: str | None = "/tmp/pydala/",
+        protocol: str | None = None,
+        profile: str | None = None,
+        endpoint_url: str | None = None,
+        storage_options: dict = {},
+        fsspec_kwargs: dict = {},
+        arrow_kwargs: dict = {},
     ):
         self._name = name
-
         self._set_filesystems(
-            filesystem=filesystem,
-            bucket=bucket,
+            protocol=protocol,
+            path=path,
             caching=caching,
+            profile=profile,
+            endpoint_url=endpoint_url,
+            storage_options=storage_options,
+            fsspec_kwargs=fsspec_kwargs,
+            arrow_kwargs=arrow_kwargs,
         )
         self._set_paths(
             path=path, bucket=bucket, caching=caching, cache_prefix=cache_prefix
@@ -67,11 +75,13 @@ class Reader:
     def _set_paths(
         self, path: str, bucket: str | None, caching: bool, cache_prefix: str | None
     ):
-        self._bucket = bucket or self._bucket
+        path = infer_storage_options(path)["path"]
+        self._bucket = bucket
         self._path = os.path.join(bucket, path) if bucket is not None else path
-        self._path_org = self._path
+        self._org_path = self._path
         self._caching = caching
         self._cache_prefix = cache_prefix
+
         if self._caching:
 
             if cache_prefix is not None:
@@ -81,17 +91,35 @@ class Reader:
                 self._cache_path = mkdtemp()
 
     def _set_filesystems(
-        self, filesystem: FileSystem | None, bucket: str | None, caching: bool
+        self,
+        protocol: str | None,
+        path: str,
+        caching: bool,
+        profile: str | None,
+        endpoint_url: str | None,
+        storage_options: dict,
+        fsspec_kwargs: dict,
+        arrow_kwargs: dict,
     ):
-        self._filesystem = filesystem or FileSystem(
-            type_="local", bucket=bucket, use_s5cmd=False
+        self._protocol = protocol or infer_storage_options(path)["protocol"]
+        self._profile=profile
+        self._endpoint_url = endpoint_url
+        self._storage_options = storage_options
+        self._org_fs, self._org_afs = get_filesystem(
+            protocol=self._protocol,
+            profile=profile,
+            endpoint_url=endpoint_url,
+            storage_options=storage_options,
+            fsspec_kwargs=fsspec_kwargs,
+            arrow_kwargs=arrow_kwargs,
         )
-        self._filesystem_org = filesystem
+        self._fs = self._org_fs
+        self._afs = self._org_afs
+
         if caching:
-            self._cache_filesystem = FileSystem(
-                type_="local", bucket=bucket, use_s5cmd=False
-            )
-        self._bucket = bucket or self._filesystem._bucket
+            self._cache_fs, self._cache_afs = get_filesystem(protocol="file")
+            self._fs = self._cache_fs
+            self._afs = self._cache_afs
 
     def sort(self, by: str | list | None, ascending: bool | list | None = None):
         self._sort_by = by
@@ -120,19 +148,24 @@ class Reader:
         return f"{self._name}_{name}" if self._name is not None else name
 
     def _to_cache(self):
-        if self._filesystem._has_s5cmd:
-            self._filesystem.s5sync("s3:" + self._path_org, self._cache_path)
+        if hasattr(self._org_fs, "has_s5cmd"):
+            if self._org_fs.has_s5cmd:
+                self._org_fs.sync("s3://" + self._org_path, self._cache_path, recursive=True)
+            else:
+                self._org_fs.get(self._org_path, self._cache_path, recursive=True)
         else:
-            self._filesystem.get(self._path_org, self._cache_path, recursive=True)
+            self._org_fs.get(self._org_path, self._cache_path, recursive=True)
+
         self._path = self._cache_path
-        self._filesystem = self._cache_filesystem
+        self._fs = self._cache_fs
+        self._afs = self._cache_afs
         self._cached = True
 
     def _load_feather(self, **kwargs):
-        if self._filesystem.exists(self._path):
-            if self._filesystem.isfile(self._path):
+        if self._fs.exists(self._path):
+            if self._fs.isfile(self._path):
 
-                with self._filesystem.open(self._path) as f:
+                with self._fs.open(self._path) as f:
                     self._mem_table = pf.read_feather(f, **kwargs)
 
             else:
@@ -143,12 +176,12 @@ class Reader:
             raise FileNotFoundError(f"{self._path} not found.")
 
     def _load_parquet(self, **kwargs):
-        if self._filesystem.exists(self._path):
+        if self._fs.exists(self._path):
 
             self._mem_table = pq.read_table(
                 self._path,
                 partitioning=self._partitioning,
-                filesystem=self._filesystem._fs,
+                filesystem=self._afs,
                 **kwargs,
             )
         else:
@@ -164,11 +197,11 @@ class Reader:
 
         name = self._gen_name(name=name)
 
-        if self._filesystem.exists(self._path):
+        if self._fs.exists(self._path):
             self._dataset = ds.dataset(
                 source=self._path,
                 format=self._format,
-                filesystem=self._filesystem._fs,
+                filesystem=self._afs,
                 partitioning=self._partitioning,
                 **kwargs,
             )
@@ -540,80 +573,3 @@ class Reader:
     @property
     def cached(self) -> bool:
         return self._cached
-
-
-class TimeFlyReader(Reader):
-    def __init__(
-        self,
-        path: str,
-        timefly: str | dt.datetime | None = None,
-        bucket: str | None = None,
-        name: str | None = None,
-        partitioning: ds.Partitioning | str | None = None,
-        filesystem: FileSystem | None = None,
-        format: str | None = "parquet",
-        sort_by: str | list | None = None,
-        ascending: bool | list | None = None,
-        distinct: bool | None = None,
-        drop: str | list | None = "__index_level_0__",
-        ddb: duckdb.DuckDBPyConnection | None = None,
-        caching: bool = False,
-        cache_prefix: str | None = "/tmp/pydala/",
-    ):
-        bucket = bucket or ""
-
-        if filesystem.exists(os.path.join(bucket, path, "timefly.toml")):
-
-            with open(os.path.join(path, "timefly.toml")) as f:
-                self._timefly = toml.load(f)
-
-            subpath = self._find_timefly_subpath(timefly=timefly)
-            path = os.path.join(path, subpath)
-        else:
-            self._timefly = False
-
-        super().__init__(
-            path=path,
-            bucket=bucket,
-            name=name,
-            partitioning=partitioning,
-            filesystem=filesystem,
-            format=format,
-            sort_by=sort_by,
-            ascending=ascending,
-            distinct=distinct,
-            drop=drop,
-            ddb=ddb,
-            caching=caching,
-            cache_prefix=cache_prefix,
-        )
-
-    def _find_timefly_subpath(self, timefly: str | dt.datetime | None):
-
-        timefly = timefly or "current"
-
-        if timefly != "current":
-            if isinstance(timefly, str):
-                timefly_timestamp = dt.datetime.strptime(timefly, "%Y%m%d_%H%M%S")
-            else:
-                timefly_timestamp = timefly
-
-            all_timestamps = [
-                dt.datetime.strptime(subpath, "%Y%m%d_%H%M%S")
-                for subpath in self._timefly["dataset"]["subpaths"]["all"]
-            ]
-            timefly_diff = sorted(
-                [
-                    timefly_timestamp - timestamp
-                    for timestamp in all_timestamps
-                    if timestamp < timefly_timestamp
-                ]
-            )[0]
-            timefly_subpath = (timefly_timestamp - timefly_diff).strftime(
-                "%Y%m%d_%H%M%S"
-            )
-
-        else:
-            timefly_subpath = "current"
-
-        return os.path.join(self._path, timefly_subpath)

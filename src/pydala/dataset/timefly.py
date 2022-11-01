@@ -3,15 +3,39 @@ import os
 
 import duckdb
 import pyarrow.dataset as ds
+import pytz
 import toml
+from writer import Writer
 
-from ..filesystem.filesystem import FileSystem
+from ..filesystem.filesystem import get_filesystem
 from .reader import Reader
-from .writer import Writer
 
 
-class ConfigReader:
-    ...
+# class Config:
+#     def __init__(self, path:str, bucket:str|None=None, filesystem=FileSystem|None):
+#         if filesystem is None:
+#             filesystem = FileSystem(type_="local")
+#         self._filesystem = filesystem
+
+#         self._bucket = bucket or ""
+        
+#         self.path = os.path.join(bucket, path, "timefly.toml")
+
+#         self.config = self.read(filesystem=filesystem, path=path, bucket=bucket)
+
+#     def init(self, name:str|None=None, description:str|None=None):
+#         self.config = 
+        
+#     def read(self):
+        
+#         if self.filesystem.exists(self.path):
+#             with open(self.path) as f:
+#                 return toml.load(f)
+        
+        
+#     def write(self,):
+#         pass
+
 
 
 class DatasetReader(Reader):
@@ -22,7 +46,7 @@ class DatasetReader(Reader):
         bucket: str | None = None,
         name: str | None = None,
         partitioning: ds.Partitioning | str | None = None,
-        filesystem: FileSystem | None = None,
+        #filesystem: FileSystem | None = None,
         format: str | None = "parquet",
         sort_by: str | list | None = None,
         ascending: bool | list | None = None,
@@ -32,10 +56,8 @@ class DatasetReader(Reader):
         caching: bool = False,
         cache_prefix: str | None = "/tmp/pydala/",
     ):
-
-        self._timefly = self._read_timefly(
-            filesystem=filesystem, path=path, bucket=bucket
-        )
+        
+        #self._timefly = ConfigReader(filesystem=filesystem, path=path, bucket=bucket)
 
         if self._timefly is not None:
             subpath = self._find_timefly_subpath(timefly=timefly)
@@ -59,18 +81,6 @@ class DatasetReader(Reader):
             cache_prefix=cache_prefix,
         )
 
-    def _read_timefly(
-        self, filesystem: FileSystem | None, path: str, bucket: str | None = None
-    ):
-        if filesystem is None:
-            filesystem = FileSystem(type_="local")
-
-        bucket = bucket or ""
-
-        if filesystem.exists(os.path.join(bucket, path, "timefly.toml")):
-
-            with open(os.path.join(path, "timefly.toml")) as f:
-                return toml.load(f)
 
     def _find_timefly_subpath(self, timefly: str | dt.datetime | None):
 
