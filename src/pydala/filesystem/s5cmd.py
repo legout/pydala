@@ -47,13 +47,10 @@ class S5CmdFileSystem(S3FileSystem):
                 client_kwargs = dict(region_name=region)
             else:
                 client_kwargs["region_name"] = region
+        
 
         if profile is not None:
-            os.environ["AWS_PROFILE"] = profile
-            session = AioSession(profile=profile)
-            key = None
-            secret = None
-            token = None
+            os.environ["AWS_PROFILE"] = profile            
 
         super().__init__(
             anon=anon,
@@ -75,6 +72,7 @@ class S5CmdFileSystem(S3FileSystem):
             cache_regions=cache_regions,
             asynchronous=asynchronous,
             loop=loop,
+            profile=profile,
             **kwargs,
         )
 
