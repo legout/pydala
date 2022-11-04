@@ -189,7 +189,7 @@ class S5CmdFileSystem(S3FileSystem):
         return self._has_s5cmd
 
     def print_s5cmd_help(self, operation: str = "cp") -> None:
-        if self._has_s5cmd:
+        if self.has_s5cmd:
             resp = subprocess.run(
                 f"s5cmd {operation} -h", shell=True, capture_output=True
             )
@@ -661,7 +661,7 @@ class S5CmdFileSystem(S3FileSystem):
     @property
     def version(self) -> None:
         """Prints the s5cmd version."""
-        if self._has_s5cmd:
+        if self.has_s5cmd:
             resp = subprocess.run(f"s5cmd version", shell=True, capture_output=True)
             if len(resp.stdout) > 0:
                 print(resp.stdout.decode().strip())

@@ -309,11 +309,15 @@ def drop_columns(
     if columns is not None:
         if isinstance(table, (pa.Table, pl.DataFrame, pd.DataFrame)):
             columns = [col for col in columns if col in table.column_names]
-            return table.drop(columns=columns)
+            if len(columns)>0:
+                return table.drop(columns=columns)
+            return table
 
         elif isinstance(table, ds.FileSystemDataset):
             columns = [col for col in table.schema.names if col not in columns]
-            return table.to_table(columns=columns)
+            if len(columns)>0:
+                return table.to_table(columns=columns)
+            return table.to_table()
 
         elif isinstance(table, duckdb.DuckDBPyRelation):
             columns = [
@@ -321,6 +325,8 @@ def drop_columns(
                 for col in table.columns
                 if col not in columns
             ]
-            return table.project(",".join(columns))
+            if len(columns)>0:
+                return table.project(",".join(columns))
+            return table
     else:
         return table

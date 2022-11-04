@@ -9,8 +9,15 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.feather as pf
 import pyarrow.parquet as pq
+from fsspec import spec
 from fsspec.utils import infer_storage_options
-from ..filesystem.filesystem import get_filesystem
+from pyarrow.fs import FileSystem
+
+from ..filesystem.base import get_fsspec_filesystem, get_pyarrow_filesystem
+from ..filesystem.dirfs import (  # DirFileSystem,
+    get_fsspec_dir_filesystem,
+    get_pyarrow_subtree_filesystem,
+)
 from .utils import (
     distinct_table,
     drop_columns,
@@ -36,28 +43,33 @@ class Reader:
         drop: str | list | None = "__index_level_0__",
         ddb: duckdb.DuckDBPyConnection | None = None,
         caching: bool = False,
-        cache_prefix: str | None = "/tmp/pydala/",
+        cache_storage: str | None = "/tmp/pydala/",
         protocol: str | None = None,
         profile: str | None = None,
         endpoint_url: str | None = None,
         storage_options: dict = {},
-        fsspec_kwargs: dict = {},
-        arrow_kwargs: dict = {},
+        fsspec_fs: spec.AbstractFileSystem | None = None,
+        pyarrow_fs: FileSystem | None = None,
     ):
         self._name = name
-        self._set_filesystems(
-            protocol=protocol,
+        self._tables = dict()
+        self._cached = False
+
+        self._set_paths(
             path=path,
+            bucket=bucket,
+            protocol=protocol,
             caching=caching,
+            cache_storage=cache_storage,
+        )
+        self._init_filesystem(
             profile=profile,
             endpoint_url=endpoint_url,
             storage_options=storage_options,
-            fsspec_kwargs=fsspec_kwargs,
-            arrow_kwargs=arrow_kwargs,
+            fsspec_fs=fsspec_fs,
+            pyarrow_fs=pyarrow_fs,
         )
-        self._set_paths(
-            path=path, bucket=bucket, caching=caching, cache_prefix=cache_prefix
-        )
+
         self._format = format
         self._partitioning = partitioning
         _ = self.sort(by=sort_by, ascending=ascending)
@@ -68,58 +80,103 @@ class Reader:
             self.ddb = ddb
         else:
             self.ddb = duckdb.connect()
-        self.ddb.execute(f"SET temp_directory='{cache_prefix}'")
-        self._tables = dict()
-        self._cached = False
+        self.ddb.execute(f"SET temp_directory='{cache_storage}'")
 
     def _set_paths(
-        self, path: str, bucket: str | None, caching: bool, cache_prefix: str | None
+        self,
+        path: str,
+        bucket: str | None,
+        protocol: str | None,
+        caching: bool,
+        cache_storage: str | None,
     ):
-        path = infer_storage_options(path)["path"]
-        self._bucket = bucket
-        self._path = os.path.join(bucket, path) if bucket is not None else path
-        self._org_path = self._path
+        if bucket is not None:
+            self._bucket = infer_storage_options(bucket)["path"]
+        else:
+            self._bucket = None
+
+        self._path = infer_storage_options(path)["path"]
+
+        if self._bucket is not None:
+            self._protocol = protocol or infer_storage_options(bucket)["protocol"]
+
+        else:
+            self._protocol = protocol or infer_storage_options(path)["protocol"]
+
+        # self._org_path = self._path
         self._caching = caching
-        self._cache_prefix = cache_prefix
+        self._cache_storage = cache_storage
 
         if self._caching:
 
-            if cache_prefix is not None:
-                os.makedirs(cache_prefix, exist_ok=True)
-                self._cache_path = mkdtemp(prefix=cache_prefix)
+            if cache_storage is not None:
+                os.makedirs(cache_storage, exist_ok=True)
+                self._cache_bucket = mkdtemp(prefix=cache_storage)
             else:
-                self._cache_path = mkdtemp()
+                self._cache_bucket = mkdtemp()
 
-    def _set_filesystems(
+    def _init_filesystem(
         self,
-        protocol: str | None,
-        path: str,
-        caching: bool,
         profile: str | None,
         endpoint_url: str | None,
-        storage_options: dict,
-        fsspec_kwargs: dict,
-        arrow_kwargs: dict,
+        storage_options: dict | None,
+        fsspec_fs: spec.AbstractFileSystem | None,
+        pyarrow_fs: FileSystem | None,
     ):
-        self._protocol = protocol or infer_storage_options(path)["protocol"]
-        self._profile=profile
+        self._profile = profile
         self._endpoint_url = endpoint_url
         self._storage_options = storage_options
-        self._org_fs, self._org_afs = get_filesystem(
-            protocol=self._protocol,
-            profile=profile,
-            endpoint_url=endpoint_url,
-            storage_options=storage_options,
-            fsspec_kwargs=fsspec_kwargs,
-            arrow_kwargs=arrow_kwargs,
-        )
-        self._fs = self._org_fs
-        self._afs = self._org_afs
 
-        if caching:
-            self._cache_fs, self._cache_afs = get_filesystem(protocol="file")
-            self._fs = self._cache_fs
-            self._afs = self._cache_afs
+        self._filesystem = {}
+
+        if fsspec_fs is not None:
+            self._filesystem["fsspec_main"] = fsspec_fs
+        else:
+            self._filesystem["fsspec_main"] = get_fsspec_filesystem(
+                protocol=self._protocol,
+                profile=self._profile,
+                endpoint_url=self._endpoint_url,
+                **self._storage_options,
+            )
+
+        if pyarrow_fs is not None:
+            self._filesystem["pyarrow_main"] = pyarrow_fs
+        else:
+            self._filesystem["pyarrow_main"] = get_pyarrow_filesystem(
+                protocol=self._protocol,
+                endpoint_url=self._endpoint_url,
+                **self._storage_options,
+            )
+
+        if self._bucket is not None:
+            self._filesystem["fsspec_main"] = get_fsspec_dir_filesystem(
+                path=self._bucket, filesystem=self._filesystem["fsspec_main"]
+            )
+            self._filesystem["pyarrow_main"] = get_pyarrow_subtree_filesystem(
+                path=self._bucket, filesystem=self._filesystem["pyarrow_main"]
+            )
+
+        if self._caching:
+
+            self._filesystem["fsspec_cache"] = get_fsspec_dir_filesystem(
+                path=self._cache_bucket,
+                filesystem=get_fsspec_filesystem(protocol="file"),
+            )
+
+            self._filesystem["pyarrow_cache"] = get_pyarrow_subtree_filesystem(
+                path=self._cache_bucket,
+                filesystem=get_pyarrow_filesystem(protocol="file"),
+            )
+
+        self._set_filesystem()
+
+    def _set_filesystem(self):
+        if self._cached:
+            self._fs = self._filesystem["fsspec_cache"]  # .copy()["fsspec"]
+            self._pafs = self._filesystem["pyarrow_cache"]  # .copy()["pyarrow"]
+        else:
+            self._fs = self._filesystem["fsspec_main"]  # .copy()["fsspec"]
+            self._pafs = self._filesystem["pyarrow_main"]  # .copy()["pyarrow"]
 
     def sort(self, by: str | list | None, ascending: bool | list | None = None):
         self._sort_by = by
@@ -148,27 +205,50 @@ class Reader:
         return f"{self._name}_{name}" if self._name is not None else name
 
     def _to_cache(self):
-        if hasattr(self._org_fs, "has_s5cmd"):
-            if self._org_fs.has_s5cmd:
-                self._org_fs.sync("s3://" + self._org_path, self._cache_path, recursive=True)
-            else:
-                self._org_fs.get(self._org_path, self._cache_path, recursive=True)
-        else:
-            self._org_fs.get(self._org_path, self._cache_path, recursive=True)
+        recursive = (
+            False if self._filesystem["fsspec_main"].isfile(self._path) else True
+        )
 
-        self._path = self._cache_path
-        self._fs = self._cache_fs
-        self._afs = self._cache_afs
+        if hasattr(self._fs, "has_s5cmd"):
+            if self._fs.has_s5cmd and self._profile is not None:
+                self._fs.sync(
+                    "s3://" + os.path.join(self._bucket or "", self._path),
+                    os.path.join(
+                        self._cache_bucket,
+                        os.path.dirname(self._path) if not recursive else self._path,
+                    ),
+                    recursive=recursive,
+                )
+            else:
+                self._fs.get(
+                    self._path,
+                    os.path.join(self._cache_bucket, self._path),
+                    recursive=recursive,
+                )
+        else:
+            self._fs.get(
+                self._path,
+                os.path.join(self._cache_bucket, self._path),
+                recursive=recursive,
+            )
+
+        # self._path = os.path.join(self._cache_bucket, self._path)
         self._cached = True
+        self._set_filesystem()
 
     def _load_feather(self, **kwargs):
         if self._fs.exists(self._path):
             if self._fs.isfile(self._path):
-
+                # use polars
+                # with self._pafs.open_input_file(self._path) as f:
                 with self._fs.open(self._path) as f:
-                    self._mem_table = pf.read_feather(f, **kwargs)
+                    self._mem_table = pl.read_ipc(f).to_arrow()
+                # else:
+                #    with self._fs.open(self._path) as f:
+                #        self._mem_table = pf.read_table(f, **kwargs)
 
             else:
+
                 if not hasattr(self, "_dataset"):
                     self.set_dataset()
                 self._mem_table = self._dataset.to_table(**kwargs)
@@ -181,7 +261,7 @@ class Reader:
             self._mem_table = pq.read_table(
                 self._path,
                 partitioning=self._partitioning,
-                filesystem=self._afs,
+                filesystem=self._fs,
                 **kwargs,
             )
         else:
@@ -189,7 +269,25 @@ class Reader:
 
     def _load_csv(self, **kwargs):
 
-        pass
+        if self._fs.exists(self._path):
+            if self._fs.isfile(self._path):
+                # use polars, if storage_options available
+                # with self._fs.open_input_file(self._path) as f:
+                with self._fs.open(self._path) as f:
+                    self._mem_table = pl.read_csv(f).to_arrow()
+
+                # else:
+                #    with self._fs.open(self._path) as f:
+                #        self._mem_table = pf.read_table(f, **kwargs)
+
+            else:
+
+                if not hasattr(self, "_dataset"):
+                    self.set_dataset()
+                self._mem_table = self._dataset.to_table(**kwargs)
+
+        else:
+            raise FileNotFoundError(f"{self._path} not found.")
 
     def set_dataset(self, name: str = "dataset", **kwargs):
         if self._caching and not self.cached:
@@ -201,7 +299,7 @@ class Reader:
             self._dataset = ds.dataset(
                 source=self._path,
                 format=self._format,
-                filesystem=self._afs,
+                filesystem=self._fs,
                 partitioning=self._partitioning,
                 **kwargs,
             )
@@ -573,3 +671,4 @@ class Reader:
     @property
     def cached(self) -> bool:
         return self._cached
+

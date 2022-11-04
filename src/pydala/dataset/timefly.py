@@ -7,7 +7,7 @@ import pytz
 import toml
 from writer import Writer
 
-from ..filesystem.filesystem import get_filesystem
+from ..filesystem.utils import get_filesystem
 from .reader import Reader
 
 
