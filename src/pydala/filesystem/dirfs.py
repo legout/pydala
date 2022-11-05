@@ -80,9 +80,9 @@ class DirFileSystem(DirFileSystem):
             return res
 
 
-def get_fsspec_dir_filesystem(path: str, filesystem: AbstractFileSystem):
+def fsspec_dir_filesystem(path: str, filesystem: AbstractFileSystem):
     return DirFileSystem(path=path, fs=filesystem)
 
 
-def get_pyarrow_subtree_filesystem(path: str, filesystem: pafs.SubTreeFileSystem):
+def pyarrow_subtree_filesystem(path: str, filesystem: pafs.SubTreeFileSystem):
     return pafs.SubTreeFileSystem(base_path=path, base_fs=filesystem)

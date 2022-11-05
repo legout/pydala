@@ -1,7 +1,5 @@
 import datetime as dt
 import os
-import uuid
-from pathlib import Path
 
 import duckdb
 import pandas as pd
@@ -10,39 +8,72 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.feather as pf
 import pyarrow.parquet as pq
+from fsspec import spec
+from fsspec.utils import infer_storage_options
+from pyarrow.fs import FileSystem
 
-#from ..filesystem.filesystem import FileSystem
-from .utils import get_ddb_sort_str, to_relation
+# from ..filesystem.filesystem import FileSystem
+from .reader import Reader
+from .helper import (
+    get_ddb_sort_str,
+    get_filesystem,
+    random_id,
+    to_relation,
+    get_tables_diff,
+)
 
 
 class Writer:
     def __init__(
         self,
-        path: str,
+        base_path: str,
         bucket: str | None = None,
-        base_name: str = "data",
-        partitioning: ds.Partitioning | list | str | None = None,
-        filesystem: str | None = None,
-        format: str | None = "parquet",
-        compression: str | None = "zstd",
+        partitioning: list | str | None = None,
+        format: str = "parquet",
+        compression: str = "zstd",
+        mode: str | None = "append",  # can be 'append', 'overwrite', 'raise'
         sort_by: str | list | None = None,
         ascending: bool | list | None = None,
         distinct: bool | None = None,
         drop: str | list | None = "__index_level_0__",
         ddb: duckdb.DuckDBPyConnection | None = None,
-        cache_prefix: str | None = "/tmp/pydala/",
+        cache_storage: str | None = "/tmp/pydala/",
+        protocol: str | None = None,
+        profile: str | None = None,
+        endpoint_url: str | None = None,
+        storage_options: dict = {},
+        fsspec_fs: spec.AbstractFileSystem | None = None,
+        pyarrow_fs: FileSystem | None = None,
+        base_name: str = "data",
     ):
+        self._profile = profile
+        self._endpoint_url = endpoint_url
+        self._storage_options = storage_options
+        self._mode = mode
 
-        self._set_filesystems(filesystem=filesystem, bucket=bucket)
+        self._set_path(base_path=base_path, bucket=bucket, protocol=protocol)
 
-        self._path = path
-        self._base_name = base_name
-        self._partitioning = (
+        self._filesystem = get_filesystem(
+            bucket=self._bucket,
+            protocol=self._protocol,
+            profile=self._profile,
+            endpoint_url=self._endpoint_url,
+            storage_options=self._storage_options,
+            caching=None,
+            cache_bucker=None,
+            fsspec_fs=fsspec_fs,
+            pyarrow_fs=pyarrow_fs,
+        )
+        self._fs = self._filesystem["fsspec_main"]
+        self._pafs = self._filesystem["pyarrow_main"]
+
+        self._partiotioning = (
             [partitioning] if isinstance(partitioning, str) else partitioning
         )
-
         self._format = format
         self._compression = compression
+        self._base_name = base_name
+
         _ = self.sort(by=sort_by, ascending=ascending)
         _ = self.distinct(value=distinct)
         _ = self.drop(columns=drop)
@@ -51,89 +82,21 @@ class Writer:
             self.ddb = ddb
         else:
             self.ddb = duckdb.connect()
-        self.ddb.execute(f"SET temp_directory='{cache_prefix}'")
-        self._tables = dict()
+        self.ddb.execute(f"SET temp_directory='{cache_storage}'")
 
-    def _set_filesystems(self, filesystem: str | None, bucket: str | None):
-        self._filesystem = filesystem or FileSystem(
-            type_="local", bucket=bucket, use_s5cmd=False
-        )
-        self._filesystem_org = filesystem
-        self._bucket = bucket or self._filesystem._bucket
-
-    def _gen_path(
-        self,
-        path: str,
-        partition_names: tuple | None = None,
-        with_time_partition: bool = False,
-    ):
-
-        path = Path(path)
-        if path.suffix != "":
-            path = path.parent
-            name = path.suffix
+    def _set_path(self, base_path: str, bucket: str | None, protocol: str | None):
+        if bucket is not None:
+            self._bucket = infer_storage_options(bucket)["path"]
         else:
-            name = None
+            self._bucket = None
 
-        if partition_names is not None:
-            path = os.path.join(path, *partition_names)
+        self._base_path = infer_storage_options(base_path)["path"]
 
-        if with_time_partition:
-            path = os.path.join(path, dt.datetime.now().strftime("%Y%m%d_%H%M%S"))
+        if self._bucket is not None:
+            self._protocol = protocol or infer_storage_options(bucket)["protocol"]
 
-        if name is None:
-            name = f"{self._base_name}-{uuid.uuid4().hex}.{self._format}"
-
-        path = os.path.join(path, name)
-
-        if self._filesystem._type == "local" or self._filesystem._type == None:
-            path.mkdir.parent(exist_ok=True, parents=True)
-
-        return path
-
-    def _add_table(
-        self,
-        table: duckdb.DuckDBPyRelation
-        | pa.Table
-        | ds.FileSystemDataset
-        | pd.DataFrame
-        | pl.DataFrame
-        | str,
-        sort_by: str | list | None = None,
-        ascending: bool | list | None = None,
-        distinct: bool | None = None,
-        drop: str | list | None = None,
-    ):
-
-        self.sort(by=sort_by, ascending=ascending)
-        self.distinct(value=distinct)
-        self.drop(columns=drop)
-
-        self._table = to_relation(
-            table=table,
-            ddb=self.ddb,
-            sort_by=self._sort_by,
-            ascending=self._ascending,
-            distinct=self._distinct,
-            drop=self._drop,
-        )
-
-    def _get_partition_filters(self):
-
-        filters = []
-        all_partitions = (
-            self._table.project(",".join(self._partitioning)).distinct().fetchall()
-        )
-
-        for partition_names in all_partitions:
-
-            filter_ = []
-            for p in zip(self._partitioning, partition_names):
-                filter_.append(f"{p[0]}='{p[1]}'")
-
-            filters.append(" AND ".join(filter_))
-
-        return filters
+        else:
+            self._protocol = protocol or infer_storage_options(base_path)["protocol"]
 
     def sort(self, by: str | list | None, ascending: bool | list | None = None):
         self._sort_by = by
@@ -158,49 +121,107 @@ class Writer:
         self._drop = columns
         return self
 
+    def _gen_path(
+        self,
+        partition_names: tuple | None = None,
+    ):
+        if os.path.splitext(self._base_path)[-1] != "":
+            return self._base_path
+
+        if partition_names is not None:
+            path = os.path.join(self._base_path, *partition_names)
+        else:
+            path = self._base_path
+
+        filename = f"{self._base_name}-{dt.datetime.now().strftime('%Y%m%d_%H%M%S%f')[:-3]}-{random_id()}.{self._format}"
+
+        if self._protocol == "file":
+            if not self._fs.exists(path):
+                self._fs.mkdir(path, create_parents=True)
+
+        if self._fs.exists(path):
+            if self._mode == "raise":
+                self._base_path_empty = False
+                raise FileExistsError(
+                    f"""{path} exists. 
+                    Use mode='overwrite' to overwrite {path} or mode='append' to append table to {path}"""
+                )
+
+            elif self._mode == "overwrite":
+                self._fs.rm(path, recursive=True)
+                self._base_path_empty = True
+            else:
+                self._base_path_empty = False
+        else:
+            self._base_path_empty = True
+
+        return os.path.join(path, filename)
+
+    def _get_partition_filters(self):
+
+        filters = []
+        all_partitions = (
+            self._table.project(",".join(self._partitioning)).distinct().fetchall()
+        )
+
+        for partition_names in all_partitions:
+
+            filter_ = []
+            for p in zip(self._partitioning, partition_names):
+                filter_.append(f"{p[0]}='{p[1]}'")
+
+            filters.append(" AND ".join(filter_))
+
+        return zip(filters, all_partitions)
+
     def write_table(
         self,
         table: pa.Table,
-        path: Path | str,
+        path: str,
         row_group_size: int | None = None,
-        compression: str | None = None,
+        # compression: str | None = None,
         **kwargs,
     ):
+        format = self._format.replace("ipc", "feather").replace("arrow", "feather")
 
-        filesystem = kwargs.pop("filesystem", self._filesystem)
-        compression = self._compression if compression is None else compression
-
-        format = (
-            kwargs.pop("format", self._format)
-            .replace("arrow", "feather")
-            .replace("ipc", "feather")
-        )
+        if not self._base_path_empty and self._distinct:
+            base_path = os.path.dirname(path)
+            existing_table=Reader(
+                path=base_path,
+                bucket=self._bucket,
+                format=self._format,
+                sort_by=self._sort_by,
+                ascending=self._ascending,
+                distinct=self._distinct,
+                drop=self._drop,
+                ddb=self.ddb,
+                fsspec_fs=self._fs,
+                pyarrow_fs=self._pafs
+            )
+            if existing_table.disk_usage / 1024**2 <=100:
+                table = get_tables_diff(table1=table, table2=existing_table.mem_table, ddb=self.ddb
+                    )
+            else:
+                table = get_tables_diff(table1=table, table2=existing_table.dataset, ddb=self.ddb)
 
         if format == "feather":
-            if filesystem is not None:
-                with open_(str(path), filesystem) as f:
-                    pf.write_feather(
-                        table,
-                        f,
-                        compression=compression,
-                        chunksize=row_group_size,
-                        **kwargs,
-                    )
 
-                pf.write_feather(
-                    table,
-                    path,
-                    compression=compression,
-                    chunksize=row_group_size,
-                    **kwargs,
+            with self._fs.open(path, "wb") as f:
+                pl.from_arrow(table).write_ipc(
+                    file=f, compression=self._compression, **kwargs
                 )
+
+        elif format == "csv":
+            with self._fs.open(path, "wb") as f:
+                pl.from_arrow(table).write_csv(file=f, **kwargs)
+
         else:
             pq.write_table(
                 table,
                 path,
                 row_group_size=row_group_size,
-                compression=compression,
-                filesystem=filesystem,
+                compression=self._compression,
+                filesystem=self._pafs,
                 **kwargs,
             )
 
@@ -212,106 +233,52 @@ class Writer:
         | pd.DataFrame
         | pl.DataFrame
         | str,
-        path: str | None = None,
-        format: str | None = None,
-        compression: str | None = None,
-        partitioning: list | str | None = None,
-        sort_by: str | list | None = None,
-        ascending: bool | list | None = None,
-        distinct: bool = False,
-        drop: str | list | None = None,
         rows_per_file: int | None = None,
         row_group_size: int | None = None,
-        with_time_partition: bool = False,
         **kwargs,
     ):
-        if path is not None:
-            self._path = path
 
-        if format is not None:
-            self._format = format
-
-        if compression is not None:
-            self._compression = compression
-
-        if partitioning is not None:
-            if isinstance(partitioning, str):
-                partitioning = [partitioning]
-            self._partitioning = partitioning
-
-        self._add_table(
+        self._table = to_relation(
             table=table,
-            sort_by=sort_by,
-            ascending=ascending,
-            distinct=distinct,
-            drop=drop,
+            ddb=self.ddb,
+            sort_by=self._sort_by,
+            ascending=self._ascending,
+            distinct=self._distinct,
+            drop=self._drop,
         )
 
         if self._partitioning is not None:
-            partition_filters = self._get_partition_filters()
+            filters = self._get_partition_filters()
 
-            for partition_filter in partition_filters:
-                table_part = table.filter(partition_filter)
+            for partition_filter, partition_names in filters:
 
-                if rows_per_file is None:
+                table_part = self._table.filter(partition_filter)
 
+                for i in range(table_part.shape[0] // rows_per_file + 1):
                     self.write_table(
-                        table=table_part.arrow(),
+                        table=table_part.limit(
+                            rows_per_file, offset=i * rows_per_file
+                        ).arrow(),
                         path=self._gen_path(
-                            path=path,
                             partition_names=partition_names,
-                            with_time_partition=with_time_partition,
                         ),
                         format=self._format,
                         compression=self._compression,
                         row_group_size=row_group_size,
                         **kwargs,
                     )
-                else:
-                    for i in range(table_part.shape[0] // rows_per_file + 1):
-                        self.write_table(
-                            table=table_part.limit(
-                                rows_per_file, offset=i * rows_per_file
-                            ).arrow(),
-                            path=self._gen_path(
-                                path=path,
-                                partition_names=partition_names,
-                                with_time_partition=with_time_partition,
-                            ),
-                            format=self._format,
-                            compression=self._compression,
-                            row_group_size=row_group_size,
-                            **kwargs,
-                        )
 
         else:
-            if rows_per_file is None:
-
+            for i in range(self._table.shape[0] // rows_per_file + 1):
                 self.write_table(
-                    table=table.arrow(),
+                    table=self._table.limit(
+                        rows_per_file, offset=i * rows_per_file
+                    ).arrow(),
                     path=self._gen_path(
-                        path=path,
                         partition_names=None,
-                        with_time_partition=with_time_partition,
                     ),
-                    format=format,
-                    compression=compression,
+                    format=self._format,
+                    compression=self._compression,
                     row_group_size=row_group_size,
                     **kwargs,
                 )
-            else:
-                for i in range(table.shape[0] // rows_per_file + 1):
-                    self.write_table(
-                        table=table.limit(
-                            rows_per_file, offset=i * rows_per_file
-                        ).arrow(),
-                        path=self._gen_path(
-                            path=path,
-                            partition_names=None,
-                            with_time_partition=with_time_partition,
-                        ),
-                        format=format,
-                        compression=compression,
-                        row_group_size=row_group_size,
-                        **kwargs,
-                    )

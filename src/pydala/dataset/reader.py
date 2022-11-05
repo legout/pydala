@@ -13,12 +13,7 @@ from fsspec import spec
 from fsspec.utils import infer_storage_options
 from pyarrow.fs import FileSystem
 
-from ..filesystem.base import get_fsspec_filesystem, get_pyarrow_filesystem
-from ..filesystem.dirfs import (  # DirFileSystem,
-    get_fsspec_dir_filesystem,
-    get_pyarrow_subtree_filesystem,
-)
-from .utils import (
+from .helper import (
     distinct_table,
     drop_columns,
     get_ddb_sort_str,
@@ -26,6 +21,8 @@ from .utils import (
     to_pandas,
     to_polars,
     to_relation,
+    get_filesystem,
+    convert_size_unit
 )
 
 
@@ -35,7 +32,7 @@ class Reader:
         path: str,
         bucket: str | None = None,
         name: str | None = None,
-        partitioning: ds.Partitioning | str | None = None,
+        partitioning: ds.Partitioning | list | str | None = None,
         format: str | None = "parquet",
         sort_by: str | list | None = None,
         ascending: bool | list | None = None,
@@ -54,6 +51,9 @@ class Reader:
         self._name = name
         self._tables = dict()
         self._cached = False
+        self._profile = profile
+        self._endpoint_url = endpoint_url
+        self._storage_options = storage_options
 
         self._set_paths(
             path=path,
@@ -62,16 +62,23 @@ class Reader:
             caching=caching,
             cache_storage=cache_storage,
         )
-        self._init_filesystem(
-            profile=profile,
-            endpoint_url=endpoint_url,
-            storage_options=storage_options,
+
+        self._filesystem = get_filesystem(
+            bucket=self._bucket,
+            protocol=self._protocol,
+            profile=self._profile,
+            endpoint_url=self._endpoint_url,
+            storage_options=self._storage_options,
+            caching=self._caching,
+            cache_bucker=self._cache_bucket,
             fsspec_fs=fsspec_fs,
             pyarrow_fs=pyarrow_fs,
         )
+        self._set_filesystem()
 
         self._format = format
         self._partitioning = partitioning
+
         _ = self.sort(by=sort_by, ascending=ascending)
         _ = self.distinct(distinct)
         _ = self.drop(columns=drop)
@@ -103,7 +110,6 @@ class Reader:
         else:
             self._protocol = protocol or infer_storage_options(path)["protocol"]
 
-        # self._org_path = self._path
         self._caching = caching
         self._cache_storage = cache_storage
 
@@ -114,69 +120,16 @@ class Reader:
                 self._cache_bucket = mkdtemp(prefix=cache_storage)
             else:
                 self._cache_bucket = mkdtemp()
-
-    def _init_filesystem(
-        self,
-        profile: str | None,
-        endpoint_url: str | None,
-        storage_options: dict | None,
-        fsspec_fs: spec.AbstractFileSystem | None,
-        pyarrow_fs: FileSystem | None,
-    ):
-        self._profile = profile
-        self._endpoint_url = endpoint_url
-        self._storage_options = storage_options
-
-        self._filesystem = {}
-
-        if fsspec_fs is not None:
-            self._filesystem["fsspec_main"] = fsspec_fs
         else:
-            self._filesystem["fsspec_main"] = get_fsspec_filesystem(
-                protocol=self._protocol,
-                profile=self._profile,
-                endpoint_url=self._endpoint_url,
-                **self._storage_options,
-            )
-
-        if pyarrow_fs is not None:
-            self._filesystem["pyarrow_main"] = pyarrow_fs
-        else:
-            self._filesystem["pyarrow_main"] = get_pyarrow_filesystem(
-                protocol=self._protocol,
-                endpoint_url=self._endpoint_url,
-                **self._storage_options,
-            )
-
-        if self._bucket is not None:
-            self._filesystem["fsspec_main"] = get_fsspec_dir_filesystem(
-                path=self._bucket, filesystem=self._filesystem["fsspec_main"]
-            )
-            self._filesystem["pyarrow_main"] = get_pyarrow_subtree_filesystem(
-                path=self._bucket, filesystem=self._filesystem["pyarrow_main"]
-            )
-
-        if self._caching:
-
-            self._filesystem["fsspec_cache"] = get_fsspec_dir_filesystem(
-                path=self._cache_bucket,
-                filesystem=get_fsspec_filesystem(protocol="file"),
-            )
-
-            self._filesystem["pyarrow_cache"] = get_pyarrow_subtree_filesystem(
-                path=self._cache_bucket,
-                filesystem=get_pyarrow_filesystem(protocol="file"),
-            )
-
-        self._set_filesystem()
+            self._cache_bucket = None
 
     def _set_filesystem(self):
         if self._cached:
-            self._fs = self._filesystem["fsspec_cache"]  # .copy()["fsspec"]
-            self._pafs = self._filesystem["pyarrow_cache"]  # .copy()["pyarrow"]
+            self._fs = self._filesystem["fsspec_cache"]
+            self._pafs = self._filesystem["pyarrow_cache"]
         else:
-            self._fs = self._filesystem["fsspec_main"]  # .copy()["fsspec"]
-            self._pafs = self._filesystem["pyarrow_main"]  # .copy()["pyarrow"]
+            self._fs = self._filesystem["fsspec_main"]
+            self._pafs = self._filesystem["pyarrow_main"]
 
     def sort(self, by: str | list | None, ascending: bool | list | None = None):
         self._sort_by = by
@@ -239,13 +192,13 @@ class Reader:
     def _load_feather(self, **kwargs):
         if self._fs.exists(self._path):
             if self._fs.isfile(self._path):
-                # use polars
+
                 # with self._pafs.open_input_file(self._path) as f:
                 with self._fs.open(self._path) as f:
-                    self._mem_table = pl.read_ipc(f).to_arrow()
-                # else:
-                #    with self._fs.open(self._path) as f:
-                #        self._mem_table = pf.read_table(f, **kwargs)
+                    # self._mem_table = pl.read_ipc(f).to_arrow()
+                    # else:
+                    #    with self._fs.open(self._path) as f:
+                    self._mem_table = pf.read_table(f, **kwargs)
 
             else:
 
@@ -257,13 +210,16 @@ class Reader:
 
     def _load_parquet(self, **kwargs):
         if self._fs.exists(self._path):
-
-            self._mem_table = pq.read_table(
-                self._path,
-                partitioning=self._partitioning,
-                filesystem=self._fs,
-                **kwargs,
-            )
+            if self._fs.isfile(self._path):
+                with self._fs.open(self._path) as f:
+                    self._mem_table = pl.read_parquet(source=f, **kwargs).to_arrow()
+            else:
+                self._mem_table = pq.read_table(
+                    self._path,
+                    partitioning=self._partitioning,
+                    filesystem=self._fs,
+                    **kwargs,
+                )
         else:
             raise FileNotFoundError(f"{self._path} not found.")
 
@@ -671,4 +627,25 @@ class Reader:
     @property
     def cached(self) -> bool:
         return self._cached
+    
+    @property
+    def buffer_size(self):
+        if not hasattr(self,"_buffer_size"):
+            self._buffer_size = self.mem_table.get_total_buffer_size()
 
+        return self._buffer_size
+    
+     
+    def get_buffer_size(self, unit:str="MB"):
+        return f"{convert_size_unit(self.buffer_size, unit=unit):.1f} {unit}"
+
+    
+    @property
+    def disk_usage(self):
+        if not hasattr(self, "_disk_usage"):
+            self._disk_usage = self._fs.du(self._path, total=True)
+        return self._disk_usage
+
+    def get_disk_usage(self, unit:str="MB"):
+        return f"{convert_size_unit(self.disk_usage, unit=unit):.1f} {unit}"
+   

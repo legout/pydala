@@ -1,8 +1,70 @@
 import duckdb
+import random
+import string
 import pandas as pd
 import polars as pl
 import pyarrow as pa
 import pyarrow.dataset as ds
+from fsspec import spec
+from pyarrow.fs import FileSystem
+
+from ..filesystem.base import fsspec_filesystem, pyarrow_filesystem
+from ..filesystem.dirfs import fsspec_dir_filesystem, pyarrow_subtree_filesystem
+
+
+def get_filesystem(
+    bucket: str | None,
+    protocol: str,
+    profile: str | None,
+    endpoint_url: str | None,
+    storage_options: dict | None,
+    caching: bool,
+    cache_bucket: str | None,
+    fsspec_fs: spec.AbstractFileSystem | None,
+    pyarrow_fs: FileSystem | None,
+):
+
+    filesystem = {}
+
+    if fsspec_fs is not None:
+        filesystem["fsspec_main"] = fsspec_fs
+    else:
+        filesystem["fsspec_main"] = fsspec_filesystem(
+            protocol=protocol,
+            profile=profile,
+            endpoint_url=endpoint_url,
+            **storage_options,
+        )
+
+    if pyarrow_fs is not None:
+        filesystem["pyarrow_main"] = pyarrow_fs
+    else:
+        filesystem["pyarrow_main"] = pyarrow_filesystem(
+            protocol=protocol,
+            endpoint_url=endpoint_url,
+            **storage_options,
+        )
+
+    if bucket is not None:
+        filesystem["fsspec_main"] = fsspec_dir_filesystem(
+            path=bucket, filesystem=filesystem["fsspec_main"]
+        )
+        filesystem["pyarrow_main"] = pyarrow_subtree_filesystem(
+            path=bucket, filesystem=filesystem["pyarrow_main"]
+        )
+
+    if caching:
+        cache_bucket = cache_bucket or ""
+        filesystem["fsspec_cache"] = fsspec_dir_filesystem(
+            path=cache_bucket,
+            filesystem=fsspec_filesystem(protocol="file"),
+        )
+
+        filesystem["pyarrow_cache"] = pyarrow_subtree_filesystem(
+            path=cache_bucket,
+            filesystem=pyarrow_filesystem(protocol="file"),
+        )
+    return filesystem
 
 
 def get_ddb_sort_str(sort_by: str | list, ascending: bool | list | None = None) -> str:
@@ -236,22 +298,41 @@ def get_tables_diff(
     ddb: duckdb.DuckDBPyConnection | None = None,
 ) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
 
-    if type(table1) != type(table2):
-        raise TypeError
+    if ddb is None:
+        ddb = duckdb.connect()
 
+    table1_ = to_relation(table1, ddb=ddb)
+    table2_ = to_relation(table2, ddb=ddb)
+
+    diff = table1_.except_(table2_)
+
+    if isinstance(table1, (pa.Table, ds.FileSystemDataset)):
+        return diff.arrow()
+    elif isinstance(table1, pd.DataFrame):
+        return diff.df()
+    elif isinstance(table1, pl.DataFrame):
+        return pl.from_arrow(diff.arrow())
+    elif isinstance(table1, duckdb.DuckDBPyRelation):
+        return diff
     else:
-        if isinstance(table1, pa.Table):
-            return ddb.from_arrow(table1).except_(ddb.from_arrow(table2)).arrow()
-        elif isinstance(table1, pd.DataFrame):
-            return ddb.from_df(table1).except_(ddb.from_df(table2)).df()
-        elif isinstance(table1, pl.DataFrame):
-            return pl.concat([table1.with_row_count(), table2.with_row_count()]).filter(
-                pl.count().over(table1.columns) == 1
-            )
-        elif isinstance(table1, str):
-            return ddb.execute(
-                f"SELECT * FROM {table1} EXCEPT SELECT * FROM {table2}"
-            ).arrow()
+        return diff.arrow()
+
+    # if type(table1) != type(table2):
+    #    raise TypeError
+
+    # else:
+    #     if isinstance(table1, pa.Table):
+    #         return ddb.from_arrow(table1).except_(ddb.from_arrow(table2)).arrow()
+    #     elif isinstance(table1, pd.DataFrame):
+    #         return ddb.from_df(table1).except_(ddb.from_df(table2)).df()
+    #     elif isinstance(table1, pl.DataFrame):
+    #         return pl.concat([table1.with_row_count(), table2.with_row_count()]).filter(
+    #             pl.count().over(table1.columns) == 1
+    #         )
+    #     elif isinstance(table1, str):
+    #         return ddb.execute(
+    #             f"SELECT * FROM {table1} EXCEPT SELECT * FROM {table2}"
+    #         ).arrow()
 
 
 def distinct_table(
@@ -309,13 +390,13 @@ def drop_columns(
     if columns is not None:
         if isinstance(table, (pa.Table, pl.DataFrame, pd.DataFrame)):
             columns = [col for col in columns if col in table.column_names]
-            if len(columns)>0:
+            if len(columns) > 0:
                 return table.drop(columns=columns)
             return table
 
         elif isinstance(table, ds.FileSystemDataset):
             columns = [col for col in table.schema.names if col not in columns]
-            if len(columns)>0:
+            if len(columns) > 0:
                 return table.to_table(columns=columns)
             return table.to_table()
 
@@ -325,8 +406,27 @@ def drop_columns(
                 for col in table.columns
                 if col not in columns
             ]
-            if len(columns)>0:
+            if len(columns) > 0:
                 return table.project(",".join(columns))
             return table
     else:
         return table
+
+def random_id():
+    alphabet = string.ascii_lowercase + string.digits
+    return "".join(random.choices(alphabet, k=8))
+
+def convert_size_unit(size, unit="MB"):
+    if unit=="B":
+        return size
+    elif unit=="KB":
+        return size/1024
+    elif unit=="MB":
+        return size/1024**2
+    elif unit=="GB":
+        return size/1024**3
+    elif unit=="TB":
+        return size/1024**4
+    elif unit=="PB":
+        return size/1024**5
+    

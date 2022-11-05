@@ -4,7 +4,7 @@ import pyarrow.fs as pafs
 from .s5cmd import S5CmdFileSystem
 
 
-def get_fsspec_filesystem(
+def fsspec_filesystem(
     protocol: str = "s3",
     profile: str | None = None,
     endpoint_url: str | None = None,
@@ -76,7 +76,7 @@ def get_fsspec_filesystem(
     return fsspec_filesystem
 
 
-def get_pyarrow_filesystem(
+def pyarrow_filesystem(
     protocol: str = "s3", endpoint_url: str | None = None, **storage_options
 ):
     if protocol.lower() == "local":
@@ -138,3 +138,5 @@ def get_pyarrow_filesystem(
         )
 
     return pyarrow_filesystem
+
+
