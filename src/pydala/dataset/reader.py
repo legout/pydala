@@ -70,7 +70,7 @@ class Reader:
             endpoint_url=self._endpoint_url,
             storage_options=self._storage_options,
             caching=self._caching,
-            cache_bucker=self._cache_bucket,
+            cache_bucket=self._cache_bucket,
             fsspec_fs=fsspec_fs,
             pyarrow_fs=pyarrow_fs,
         )
@@ -158,8 +158,9 @@ class Reader:
         return f"{self._name}_{name}" if self._name is not None else name
 
     def _to_cache(self):
+        self._fs.invalidate_cache()
         recursive = (
-            False if self._filesystem["fsspec_main"].isfile(self._path) else True
+            False if self._fs.isfile(self._path) else True
         )
 
         if hasattr(self._fs, "has_s5cmd"):

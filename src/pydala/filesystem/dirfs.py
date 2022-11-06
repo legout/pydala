@@ -78,6 +78,9 @@ class DirFileSystem(DirFileSystem):
 
             res = subprocess.run(f"s5cmd cp {src} {dest}", shell=True)
             return res
+    
+    def invalidate_cache(self, path=None):
+        return self.fs.invalidate_cache(path=path)
 
 
 def fsspec_dir_filesystem(path: str, filesystem: AbstractFileSystem):

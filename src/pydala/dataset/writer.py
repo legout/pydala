@@ -12,15 +12,16 @@ from fsspec import spec
 from fsspec.utils import infer_storage_options
 from pyarrow.fs import FileSystem
 
-# from ..filesystem.filesystem import FileSystem
-from .reader import Reader
 from .helper import (
     get_ddb_sort_str,
     get_filesystem,
+    get_tables_diff,
     random_id,
     to_relation,
-    get_tables_diff,
 )
+
+# from ..filesystem.filesystem import FileSystem
+from .reader import Reader
 
 
 class Writer:
@@ -60,14 +61,14 @@ class Writer:
             endpoint_url=self._endpoint_url,
             storage_options=self._storage_options,
             caching=None,
-            cache_bucker=None,
+            cache_bucket=None,
             fsspec_fs=fsspec_fs,
             pyarrow_fs=pyarrow_fs,
         )
         self._fs = self._filesystem["fsspec_main"]
         self._pafs = self._filesystem["pyarrow_main"]
 
-        self._partiotioning = (
+        self._partitioning = (
             [partitioning] if isinstance(partitioning, str) else partitioning
         )
         self._format = format
@@ -121,10 +122,7 @@ class Writer:
         self._drop = columns
         return self
 
-    def _gen_path(
-        self,
-        partition_names: tuple | None = None,
-    ):
+    def _gen_path(self, partition_names: tuple | None = None):
         if os.path.splitext(self._base_path)[-1] != "":
             return self._base_path
 
@@ -138,22 +136,6 @@ class Writer:
         if self._protocol == "file":
             if not self._fs.exists(path):
                 self._fs.mkdir(path, create_parents=True)
-
-        if self._fs.exists(path):
-            if self._mode == "raise":
-                self._base_path_empty = False
-                raise FileExistsError(
-                    f"""{path} exists. 
-                    Use mode='overwrite' to overwrite {path} or mode='append' to append table to {path}"""
-                )
-
-            elif self._mode == "overwrite":
-                self._fs.rm(path, recursive=True)
-                self._base_path_empty = True
-            else:
-                self._base_path_empty = False
-        else:
-            self._base_path_empty = True
 
         return os.path.join(path, filename)
 
@@ -174,56 +156,88 @@ class Writer:
 
         return zip(filters, all_partitions)
 
+    def _handle_write_mode(self, table: duckdb.DuckDBPyRelation, path: str):
+        self._fs.invalidate_cache()
+        if self._fs.exists(path):
+
+            if self._mode == "raise":
+                raise FileExistsError(
+                    f"Path '{path}' already exists. "
+                    f"Use mode='overwrite' to overwrite '{path}' "
+                    f"or mode='append' to append table to '{path}'"
+                )
+
+            elif self._mode == "overwrite":
+                self._fs.rm(path, recursive=True)
+                return table
+
+            elif self._mode == "append":
+                if self._distinct:
+
+                    existing_table = Reader(
+                        path=path,
+                        format=self._format,
+                        sort_by=self._sort_by,
+                        ascending=self._ascending,
+                        distinct=self._distinct,
+                        drop=self._drop,
+                        ddb=self.ddb,
+                        fsspec_fs=self._fs,
+                        pyarrow_fs=self._pafs,
+                    )
+
+                    if existing_table.disk_usage / 1024**2 <= 100:
+                        return get_tables_diff(
+                            table1=table,
+                            table2=existing_table.mem_table,
+                            ddb=self.ddb,
+                        )
+
+                    return get_tables_diff(
+                        table1=table,
+                        table2=existing_table.dataset,
+                        ddb=self.ddb,
+                    )
+
+                return table
+
+            else:
+                raise ValueError(
+                    "Value for mode must be 'overwrite', 'raise' or 'append'."
+                )
+
+        return table
+
     def write_table(
         self,
         table: pa.Table,
         path: str,
         row_group_size: int | None = None,
-        # compression: str | None = None,
         **kwargs,
     ):
-        format = self._format.replace("ipc", "feather").replace("arrow", "feather")
+        if table.shape[0] > 0:
+            format = self._format.replace("ipc", "feather").replace("arrow", "feather")
 
-        if not self._base_path_empty and self._distinct:
-            base_path = os.path.dirname(path)
-            existing_table=Reader(
-                path=base_path,
-                bucket=self._bucket,
-                format=self._format,
-                sort_by=self._sort_by,
-                ascending=self._ascending,
-                distinct=self._distinct,
-                drop=self._drop,
-                ddb=self.ddb,
-                fsspec_fs=self._fs,
-                pyarrow_fs=self._pafs
-            )
-            if existing_table.disk_usage / 1024**2 <=100:
-                table = get_tables_diff(table1=table, table2=existing_table.mem_table, ddb=self.ddb
+            if format == "feather":
+
+                with self._fs.open(path, "wb") as f:
+                    pl.from_arrow(table).write_ipc(
+                        file=f, compression=self._compression, **kwargs
                     )
+
+            elif format == "csv":
+                with self._fs.open(path, "wb") as f:
+                    pl.from_arrow(table).write_csv(file=f, **kwargs)
+
             else:
-                table = get_tables_diff(table1=table, table2=existing_table.dataset, ddb=self.ddb)
-
-        if format == "feather":
-
-            with self._fs.open(path, "wb") as f:
-                pl.from_arrow(table).write_ipc(
-                    file=f, compression=self._compression, **kwargs
+                pq.write_table(
+                    table,
+                    path,
+                    row_group_size=row_group_size,
+                    compression=self._compression,
+                    filesystem=self._pafs,
+                    **kwargs,
                 )
-
-        elif format == "csv":
-            with self._fs.open(path, "wb") as f:
-                pl.from_arrow(table).write_csv(file=f, **kwargs)
-
-        else:
-            pq.write_table(
-                table,
-                path,
-                row_group_size=row_group_size,
-                compression=self._compression,
-                filesystem=self._pafs,
-                **kwargs,
-            )
 
     def write_dataset(
         self,
@@ -247,6 +261,11 @@ class Writer:
             drop=self._drop,
         )
 
+        if rows_per_file is None:
+            rows_per_file = min(
+                self._table.shape[0], 1024**2 * 64 // self._table.shape[1]
+            )
+
         if self._partitioning is not None:
             filters = self._get_partition_filters()
 
@@ -254,31 +273,42 @@ class Writer:
 
                 table_part = self._table.filter(partition_filter)
 
-                for i in range(table_part.shape[0] // rows_per_file + 1):
+                # check if base_path for partition is empty and act depending on mode and distinct.
+                partition_base_path = os.path.dirname(
+                    self._gen_path(partition_names=partition_names)
+                )
+
+                table_part = self._handle_write_mode(
+                    table=table_part, path=partition_base_path
+                )
+
+                # Write table for partition
+
+                if table_part.shape[0] > 0:
+                    for i in range(table_part.shape[0] // rows_per_file + 1):
+                        self.write_table(
+                            table=table_part.limit(
+                                rows_per_file, offset=i * rows_per_file
+                            ).arrow(),
+                            path=self._gen_path(partition_names=partition_names),
+                            row_group_size=row_group_size,
+                            **kwargs,
+                        )
+
+        else:
+            # check if base_path for partition is empty and act depending on mode and distinct.
+            base_path = os.path.dirname(self._gen_path(partition_names=None))
+            self._table = self._handle_write_mode(table=self._table, path=base_path)
+
+            # write table
+
+            if self._table.shape[0] > 0:
+                for i in range(self._table.shape[0] // rows_per_file + 1):
                     self.write_table(
-                        table=table_part.limit(
+                        table=self._table.limit(
                             rows_per_file, offset=i * rows_per_file
                         ).arrow(),
-                        path=self._gen_path(
-                            partition_names=partition_names,
-                        ),
-                        format=self._format,
-                        compression=self._compression,
+                        path=self._gen_path(partition_names=None),
                         row_group_size=row_group_size,
                         **kwargs,
                     )
-
-        else:
-            for i in range(self._table.shape[0] // rows_per_file + 1):
-                self.write_table(
-                    table=self._table.limit(
-                        rows_per_file, offset=i * rows_per_file
-                    ).arrow(),
-                    path=self._gen_path(
-                        partition_names=None,
-                    ),
-                    format=self._format,
-                    compression=self._compression,
-                    row_group_size=row_group_size,
-                    **kwargs,
-                )

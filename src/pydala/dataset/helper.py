@@ -412,21 +412,22 @@ def drop_columns(
     else:
         return table
 
+
 def random_id():
     alphabet = string.ascii_lowercase + string.digits
     return "".join(random.choices(alphabet, k=8))
 
+
 def convert_size_unit(size, unit="MB"):
-    if unit=="B":
-        return size
-    elif unit=="KB":
-        return size/1024
-    elif unit=="MB":
-        return size/1024**2
-    elif unit=="GB":
-        return size/1024**3
-    elif unit=="TB":
-        return size/1024**4
-    elif unit=="PB":
-        return size/1024**5
-    
+    if unit == "B":
+        return round(size, 1)
+    elif unit == "KB":
+        return round(size / 1024, 1)
+    elif unit == "MB":
+        return round(size / 1024**2, 1)
+    elif unit == "GB":
+        return round(size / 1024**3, 1)
+    elif unit == "TB":
+        return round(size / 1024**4, 1)
+    elif unit == "PB":
+        return round(size / 1024**5,1)
