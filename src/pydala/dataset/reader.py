@@ -10,7 +10,6 @@ import pyarrow.dataset as ds
 import pyarrow.feather as pf
 import pyarrow.parquet as pq
 from fsspec import spec
-from fsspec.utils import infer_storage_options
 from pyarrow.fs import FileSystem
 
 from .helper import (
@@ -22,7 +21,8 @@ from .helper import (
     to_polars,
     to_relation,
     get_filesystem,
-    convert_size_unit
+    convert_size_unit,
+    get_storage_path_options
 )
 
 
@@ -47,6 +47,7 @@ class Reader:
         storage_options: dict = {},
         fsspec_fs: spec.AbstractFileSystem | None = None,
         pyarrow_fs: FileSystem | None = None,
+        use_pyarrow_fs:bool=False
     ):
         self._name = name
         self._tables = dict()
@@ -54,6 +55,7 @@ class Reader:
         self._profile = profile
         self._endpoint_url = endpoint_url
         self._storage_options = storage_options
+        self._use_pyarrow_fs = use_pyarrow_fs
 
         self._set_paths(
             path=path,
@@ -73,6 +75,7 @@ class Reader:
             cache_bucket=self._cache_bucket,
             fsspec_fs=fsspec_fs,
             pyarrow_fs=pyarrow_fs,
+            use_pyarrow_fs=self._use_pyarrow_fs
         )
         self._set_filesystem()
 
@@ -97,18 +100,7 @@ class Reader:
         caching: bool,
         cache_storage: str | None,
     ):
-        if bucket is not None:
-            self._bucket = infer_storage_options(bucket)["path"]
-        else:
-            self._bucket = None
-
-        self._path = infer_storage_options(path)["path"]
-
-        if self._bucket is not None:
-            self._protocol = protocol or infer_storage_options(bucket)["protocol"]
-
-        else:
-            self._protocol = protocol or infer_storage_options(path)["protocol"]
+        self._bucket, self._path, self._protocol = get_storage_path_options(bucket=bucket, path=path, protocol=protocol)
 
         self._caching = caching
         self._cache_storage = cache_storage
@@ -126,10 +118,16 @@ class Reader:
     def _set_filesystem(self):
         if self._cached:
             self._fs = self._filesystem["fsspec_cache"]
-            self._pafs = self._filesystem["pyarrow_cache"]
+            if self._use_pyarrow_fs:
+                self._pafs = self._filesystem["pyarrow_cache"]
+            else:
+                self._pafs = None
         else:
             self._fs = self._filesystem["fsspec_main"]
-            self._pafs = self._filesystem["pyarrow_main"]
+            if self._use_pyarrow_fs:
+                self._pafs = self._filesystem["pyarrow_main"]
+            else:
+                self._pafs = None
 
     def sort(self, by: str | list | None, ascending: bool | list | None = None):
         self._sort_by = by
@@ -193,18 +191,20 @@ class Reader:
     def _load_feather(self, **kwargs):
         if self._fs.exists(self._path):
             if self._fs.isfile(self._path):
+                
+                if self._use_pyarrow_fs:
+                    with self._pafs.open_input_file(self._path) as f:
+                        self._mem_table = pf.read_table(f, **kwargs)
 
-                # with self._pafs.open_input_file(self._path) as f:
-                with self._fs.open(self._path) as f:
-                    # self._mem_table = pl.read_ipc(f).to_arrow()
-                    # else:
-                    #    with self._fs.open(self._path) as f:
-                    self._mem_table = pf.read_table(f, **kwargs)
+                else:
+                    with self._fs.open(self._path) as f:                    
+                        self._mem_table = pf.read_table(f, **kwargs)
 
             else:
 
                 if not hasattr(self, "_dataset"):
                     self.set_dataset()
+
                 self._mem_table = self._dataset.to_table(**kwargs)
         else:
             raise FileNotFoundError(f"{self._path} not found.")
@@ -212,30 +212,36 @@ class Reader:
     def _load_parquet(self, **kwargs):
         if self._fs.exists(self._path):
             if self._fs.isfile(self._path):
-                with self._fs.open(self._path) as f:
-                    self._mem_table = pl.read_parquet(source=f, **kwargs).to_arrow()
+
+                if self._use_pyarrow_fs:
+                    with self._pafs.open_input_file(self._path) as f:
+                        self._mem_table = pl.read_parquet(source=f, **kwargs).to_arrow()
+
+                else:
+                    with self._fs.open(self._path) as f:
+                        self._mem_table = pl.read_parquet(source=f, **kwargs).to_arrow()
+                        
             else:
                 self._mem_table = pq.read_table(
                     self._path,
                     partitioning=self._partitioning,
-                    filesystem=self._fs,
+                    filesystem=self._pafs if self._use_pyarrow_fs else self._fs,
                     **kwargs,
                 )
         else:
             raise FileNotFoundError(f"{self._path} not found.")
 
     def _load_csv(self, **kwargs):
-
         if self._fs.exists(self._path):
             if self._fs.isfile(self._path):
-                # use polars, if storage_options available
-                # with self._fs.open_input_file(self._path) as f:
-                with self._fs.open(self._path) as f:
-                    self._mem_table = pl.read_csv(f).to_arrow()
+                
+                if self._use_pyarrow_fs:
+                    with self._pafs.open_input_file(self._path) as f:
+                        self._mem_table = pl.read_csv(f).to_arrow()
 
-                # else:
-                #    with self._fs.open(self._path) as f:
-                #        self._mem_table = pf.read_table(f, **kwargs)
+                else:
+                    with self._fs.open(self._path) as f:                    
+                        self._mem_table = pl.read_csv(f).to_arrow()
 
             else:
 

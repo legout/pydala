@@ -1,11 +1,13 @@
-import duckdb
 import random
 import string
+
+import duckdb
 import pandas as pd
 import polars as pl
 import pyarrow as pa
 import pyarrow.dataset as ds
 from fsspec import spec
+from fsspec.utils import infer_storage_options
 from pyarrow.fs import FileSystem
 
 from ..filesystem.base import fsspec_filesystem, pyarrow_filesystem
@@ -22,6 +24,7 @@ def get_filesystem(
     cache_bucket: str | None,
     fsspec_fs: spec.AbstractFileSystem | None,
     pyarrow_fs: FileSystem | None,
+    use_pyarrow_fs: bool = False,
 ):
 
     filesystem = {}
@@ -35,23 +38,34 @@ def get_filesystem(
             endpoint_url=endpoint_url,
             **storage_options,
         )
-
-    if pyarrow_fs is not None:
-        filesystem["pyarrow_main"] = pyarrow_fs
-    else:
-        filesystem["pyarrow_main"] = pyarrow_filesystem(
-            protocol=protocol,
-            endpoint_url=endpoint_url,
-            **storage_options,
-        )
+    if use_pyarrow_fs:
+        if pyarrow_fs is not None:
+            filesystem["pyarrow_main"] = pyarrow_fs
+        else:
+            filesystem["pyarrow_main"] = pyarrow_filesystem(
+                protocol=protocol,
+                endpoint_url=endpoint_url,
+                **storage_options,
+            )
 
     if bucket is not None:
-        filesystem["fsspec_main"] = fsspec_dir_filesystem(
-            path=bucket, filesystem=filesystem["fsspec_main"]
-        )
-        filesystem["pyarrow_main"] = pyarrow_subtree_filesystem(
-            path=bucket, filesystem=filesystem["pyarrow_main"]
-        )
+        if hasattr(filesystem["fsspec_main"], "path"):
+            filesystem["fsspec_main"] = fsspec_dir_filesystem(
+                path=bucket, filesystem=filesystem["fsspec_main"].fs
+            )
+        else:
+            filesystem["fsspec_main"] = fsspec_dir_filesystem(
+                path=bucket, filesystem=filesystem["fsspec_main"]
+            )
+        if use_pyarrow_fs:
+            if hasattr(filesystem["pyarrow_main"], "base_path"):
+                filesystem["pyarrow_main"] = pyarrow_subtree_filesystem(
+                    path=bucket, filesystem=filesystem["pyarrow_main"].base_fs
+                )
+            else:
+                filesystem["pyarrow_main"] = pyarrow_subtree_filesystem(
+                    path=bucket, filesystem=filesystem["pyarrow_main"]
+                )
 
     if caching:
         cache_bucket = cache_bucket or ""
@@ -59,11 +73,11 @@ def get_filesystem(
             path=cache_bucket,
             filesystem=fsspec_filesystem(protocol="file"),
         )
-
-        filesystem["pyarrow_cache"] = pyarrow_subtree_filesystem(
-            path=cache_bucket,
-            filesystem=pyarrow_filesystem(protocol="file"),
-        )
+        if use_pyarrow_fs:
+            filesystem["pyarrow_cache"] = pyarrow_subtree_filesystem(
+                path=cache_bucket,
+                filesystem=pyarrow_filesystem(protocol="file"),
+            )
     return filesystem
 
 
@@ -430,4 +444,17 @@ def convert_size_unit(size, unit="MB"):
     elif unit == "TB":
         return round(size / 1024**4, 1)
     elif unit == "PB":
-        return round(size / 1024**5,1)
+        return round(size / 1024**5, 1)
+
+
+def get_storage_path_options(bucket: str | None, path: str | None, protocol: str | None):
+    if bucket is not None:
+        protocol = protocol or infer_storage_options(bucket)["protocol"]
+        bucket = infer_storage_options(bucket)["path"]
+    else:
+        bucket = None
+        protocol = protocol or infer_storage_options(path)["protocol"]
+
+    path = infer_storage_options(path)["path"]
+
+    return bucket, path, protocol

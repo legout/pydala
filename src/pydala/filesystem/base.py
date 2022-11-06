@@ -132,11 +132,9 @@ def pyarrow_filesystem(
             **storage_options,
         )
     else:
-        fsspec_filesystem = get_fsspec_filesystem(protocol=protocol, **storage_options)
+        fsspec_filesystem = fsspec_filesystem(protocol=protocol, **storage_options)
         pyarrow_filesystem = pafs.PyFileSystem(
             pafs.FSSpecHandler(fsspec_filesystem),
         )
 
     return pyarrow_filesystem
-
-

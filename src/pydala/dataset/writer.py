@@ -9,7 +9,6 @@ import pyarrow.dataset as ds
 import pyarrow.feather as pf
 import pyarrow.parquet as pq
 from fsspec import spec
-from fsspec.utils import infer_storage_options
 from pyarrow.fs import FileSystem
 
 from .helper import (
@@ -18,6 +17,7 @@ from .helper import (
     get_tables_diff,
     random_id,
     to_relation,
+    get_storage_path_options,
 )
 
 # from ..filesystem.filesystem import FileSystem
@@ -30,6 +30,7 @@ class Writer:
         base_path: str,
         bucket: str | None = None,
         partitioning: list | str | None = None,
+        hive_style: bool = True,
         format: str = "parquet",
         compression: str = "zstd",
         mode: str | None = "append",  # can be 'append', 'overwrite', 'raise'
@@ -43,16 +44,20 @@ class Writer:
         profile: str | None = None,
         endpoint_url: str | None = None,
         storage_options: dict = {},
+        base_name: str = "data",
         fsspec_fs: spec.AbstractFileSystem | None = None,
         pyarrow_fs: FileSystem | None = None,
-        base_name: str = "data",
+        use_pyarrow_fs: bool = False,
     ):
         self._profile = profile
         self._endpoint_url = endpoint_url
         self._storage_options = storage_options
         self._mode = mode
+        self._use_pyarrow_fs = use_pyarrow_fs
 
-        self._set_path(base_path=base_path, bucket=bucket, protocol=protocol)
+        self._bucket, self._base_path, self._protocol = get_storage_path_options(
+            bucket=bucket, path=base_path, protocol=protocol
+        )
 
         self._filesystem = get_filesystem(
             bucket=self._bucket,
@@ -64,13 +69,18 @@ class Writer:
             cache_bucket=None,
             fsspec_fs=fsspec_fs,
             pyarrow_fs=pyarrow_fs,
+            use_pyarrow_fs=self._use_pyarrow_fs,
         )
         self._fs = self._filesystem["fsspec_main"]
-        self._pafs = self._filesystem["pyarrow_main"]
+        if self._use_pyarrow_fs:
+            self._pafs = self._filesystem["pyarrow_main"]
+        else:
+            self._pafs = None
 
         self._partitioning = (
             [partitioning] if isinstance(partitioning, str) else partitioning
         )
+        self._hive_style = hive_style
         self._format = format
         self._compression = compression
         self._base_name = base_name
@@ -84,20 +94,6 @@ class Writer:
         else:
             self.ddb = duckdb.connect()
         self.ddb.execute(f"SET temp_directory='{cache_storage}'")
-
-    def _set_path(self, base_path: str, bucket: str | None, protocol: str | None):
-        if bucket is not None:
-            self._bucket = infer_storage_options(bucket)["path"]
-        else:
-            self._bucket = None
-
-        self._base_path = infer_storage_options(base_path)["path"]
-
-        if self._bucket is not None:
-            self._protocol = protocol or infer_storage_options(bucket)["protocol"]
-
-        else:
-            self._protocol = protocol or infer_storage_options(base_path)["protocol"]
 
     def sort(self, by: str | list | None, ascending: bool | list | None = None):
         self._sort_by = by
@@ -127,7 +123,13 @@ class Writer:
             return self._base_path
 
         if partition_names is not None:
-            path = os.path.join(self._base_path, *partition_names)
+            if self._hive_style:
+                hive_partitions = [
+                    "=".join(part) for part in zip(self._partitioning, partition_names)
+                ]
+                path = os.path.join(self._base_path, *hive_partitions)
+            else:
+                path = os.path.join(self._base_path, *partition_names)
         else:
             path = self._base_path
 
@@ -184,6 +186,7 @@ class Writer:
                         ddb=self.ddb,
                         fsspec_fs=self._fs,
                         pyarrow_fs=self._pafs,
+                        use_pyarrow_fs=self._use_pyarrow_fs,
                     )
 
                     if existing_table.disk_usage / 1024**2 <= 100:
@@ -219,15 +222,24 @@ class Writer:
             format = self._format.replace("ipc", "feather").replace("arrow", "feather")
 
             if format == "feather":
-
-                with self._fs.open(path, "wb") as f:
-                    pl.from_arrow(table).write_ipc(
-                        file=f, compression=self._compression, **kwargs
-                    )
+                if self._use_pyarrow_fs:
+                    with self._pafs.open_output_stream(path) as f:
+                        pl.from_arrow(table).write_ipc(
+                            file=f, compression=self._compression, **kwargs
+                        )
+                else:
+                    with self._fs.open(path, "wb") as f:
+                        pl.from_arrow(table).write_ipc(
+                            file=f, compression=self._compression, **kwargs
+                        )
 
             elif format == "csv":
-                with self._fs.open(path, "wb") as f:
-                    pl.from_arrow(table).write_csv(file=f, **kwargs)
+                if self._use_pyarrow_fs:
+                    with self._pafs.open_output_stream(path) as f:
+                        pl.from_arrow(table).write_csv(file=f, **kwargs)
+                else:
+                    with self._fs.open(path, "wb") as f:
+                        pl.from_arrow(table).write_csv(file=f, **kwargs)
 
             else:
                 pq.write_table(
@@ -235,7 +247,7 @@ class Writer:
                     path,
                     row_group_size=row_group_size,
                     compression=self._compression,
-                    filesystem=self._pafs,
+                    filesystem=self._pafs if self._use_pyarrow_fs else self._fs,
                     **kwargs,
                 )
 
@@ -247,7 +259,7 @@ class Writer:
         | pd.DataFrame
         | pl.DataFrame
         | str,
-        rows_per_file: int | None = None,
+        batch_size: int | None = None,
         row_group_size: int | None = None,
         **kwargs,
     ):
@@ -261,8 +273,8 @@ class Writer:
             drop=self._drop,
         )
 
-        if rows_per_file is None:
-            rows_per_file = min(
+        if batch_size is None:
+            batch_size = min(
                 self._table.shape[0], 1024**2 * 64 // self._table.shape[1]
             )
 
@@ -285,10 +297,10 @@ class Writer:
                 # Write table for partition
 
                 if table_part.shape[0] > 0:
-                    for i in range(table_part.shape[0] // rows_per_file + 1):
+                    for i in range(table_part.shape[0] // batch_size + 1):
                         self.write_table(
                             table=table_part.limit(
-                                rows_per_file, offset=i * rows_per_file
+                                batch_size, offset=i * batch_size
                             ).arrow(),
                             path=self._gen_path(partition_names=partition_names),
                             row_group_size=row_group_size,
@@ -303,10 +315,10 @@ class Writer:
             # write table
 
             if self._table.shape[0] > 0:
-                for i in range(self._table.shape[0] // rows_per_file + 1):
+                for i in range(self._table.shape[0] // batch_size + 1):
                     self.write_table(
                         table=self._table.limit(
-                            rows_per_file, offset=i * rows_per_file
+                            batch_size, offset=i * batch_size
                         ).arrow(),
                         path=self._gen_path(partition_names=None),
                         row_group_size=row_group_size,
