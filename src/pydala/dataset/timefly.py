@@ -186,7 +186,15 @@ class TimeFly:
         self._cp(os.path.join(self._path, "current"), os.path.join(self._path, "snapshot", now[1]))
         self.write()
 
-    def _mv(self, path1, path2):
+    def delete_snapshot(self, snapshot:str):
+        path = os.path.join(self._path, "snapshot", snapshot)
+        self._rm(path=path)
+        self.config.drop("snapshot.")
+
+    def load_snapshot(self, snapshot:str):
+        pass
+
+    def _mv(self, path1:str, path2:str, format:str):
         if hasattr(self._fs, "has_s5cmd"):
             if self._fs.has_s5cmd and self._profile is not None:
                 self._fs.s5mv(
@@ -196,11 +204,15 @@ class TimeFly:
                     exclude="_timefly.toml",
                 )
             else:
+                files = self._fs.glob(os.path.join(path1, f"**.{format}"))
+                path2 = path2.lstrip("/") + "/"
                 self._fs.mv(path1, path2, recursive=True)
         else:
+            files = self._fs.glob(os.path.join(path1, f"**.{format}"))
+            path2 = path2.lstrip("/") + "/"
             self._fs.mv(path1, path2, recursive=True)
 
-    def _cp(self, path1, path2):
+    def _cp(self, path1:str, path2:str, format:str):
         if hasattr(self._fs, "has_s5cmd"):
             if self._fs.has_s5cmd and self._profile is not None:
                 self._fs.s5cp(
@@ -210,9 +222,17 @@ class TimeFly:
                     exclude="_timefly.toml",
                 )
             else:
-                self._fs.cp(path1, path2, recursive=True)
+                files = self._fs.glob(os.path.join(path1, f"**.{format}"))
+                path2 = path2.lstrip("/") + "/"
+                self._fs.cp(files, path2, recursive=True)
         else:
+            files = self._fs.glob(os.path.join(path1, f"**.{format}"))
+            path2 = path2.lstrip("/") + "/"
             self._fs.cp(path1, path2, recursive=True)
+    
+    def _rm(self, path:str):
+        self._fs.rm(path, recursive=True)
+    
 
 
 # class Reader(DatasetReader):
