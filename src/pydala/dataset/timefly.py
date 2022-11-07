@@ -1,15 +1,13 @@
 import datetime as dt
 import os
 
-import duckdb
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
-import pytz
-import tomlkit
+import rtoml
 from fsspec import spec
 from pyarrow.fs import FileSystem
 
-from .helper import get_filesystem, get_storage_path_options
+from .helper import NestedDictReplacer, get_filesystem, get_storage_path_options
 from .reader import Reader as DatasetReader
 from .writer import Writer
 
@@ -45,65 +43,73 @@ class TimeFly:
             use_pyarrow_fs=False,
         )["fsspec_main"]
 
-    def read(self):
+        self.read()
 
+    def read(self) -> None:
         if self._fs.exists(self._config_path):
             with self._fs.open(self._config_path, "r") as f:
-                self.config = tomlkit.load(f)
+                self.config = NestedDictReplacer(rtoml.load(f)).replace("None", None)
         else:
-            raise FileNotFoundError(f"File {self._path} not found.")
+            self.new()
 
-    def write(
-        self,
-    ):
+    def write(self, pretty: bool = False) -> None:
         with self._fs.open(self._config_path, "w") as f:
-            tomlkit.dump(self.config, f)
+
+            rtoml.dump(
+                NestedDictReplacer(self.config).replace(None, "None"),
+                f,
+                pretty=pretty,
+            )
 
     @staticmethod
-    def _now():
-        now = dt.datetime.utcnow()
-        return now.isoformat(timespec="seconds"), now.strftime("%Y%m%d_%H%M%S")
+    def _now() -> tuple[dt.datetime, str]:
+        now = dt.datetime.utcnow().replace(microsecond=0)
+        return now, now.strftime("%Y%m%d_%H%M%S")
 
     def infer_format(self):
         return self._fs.glob(os.path.join(self._path, "**"))[-1].split(".")[-1]
 
-    def infer_partitioning(self):
+    def infer_partitioning(self) -> str | None:
         last_file = self._fs.glob(os.path.join(self._path, "**"))[-1]
 
         if not self._fs.isfile(last_file):
             if "=" in last_file:
                 return "hive"
 
-    def infer_columns(self, format: str | None = None):
+    def infer_columns(self, format: str | None = None) -> list:
         return ds.dataset(
             self._fs.glob(os.path.join(self._path, f"**{format}")),
             format=format,
             filesystem=self._fs,
         ).schema.names
 
-    def infer_compression(self):
+    def infer_compression(self) -> str | None:
         last_file = self._fs.glob(os.path.join(self._path, "**"))[-1]
+
         with self._fs.open(last_file) as f:
             compression = pq.ParquetFile(f).metadata.row_group(0).column(0).compression
+
         if compression is not None:
             return compression.lower()
 
     def new(
         self, name: str | None = None, description: str | None = None, save: bool = True
-    ):
+    ) -> None:
 
         if name is None:
             name = os.path.basename(self._path)
 
-        self.config = tomlkit.document()
-        dataset = tomlkit.table()
-        dataset.add("name", name)
-        dataset.add("init", self._now()[0])
-        dataset.add("description", description or "")
-        dataset.add("bucket", self._bucket or "")
-        dataset.add("path", self._path or "")
+        self.config = {}
+        dataset = {
+            "name": name,
+            "init": self._now()[0],
+            "description": description or "",
+            "bucket": self._bucket or None,
+            "path": self._path or None,
+        }
 
-        self.config.add("dataset", dataset)
+        self.config["dataset"] = dataset
+
         if save:
             self.write()
 
@@ -119,7 +125,7 @@ class TimeFly:
         distinct: bool | None = None,
         columns: list | None = None,
         batch_size: int | str | None = None,
-    ):
+    ) -> None:
         self.new(name=name, description=description, save=False)
 
         format = format or self.infer_format()
@@ -130,25 +136,26 @@ class TimeFly:
             if format == "parquet":
                 compression = self.infer_compression()
 
-        current = tomlkit.table()
-        current.add("created", self._now()[0])
-        current.add("format", format or "")
-        current.add("compression", compression or "")
-        current.add("partitioning", partitioning or "")
-        current.add("sort_by", sort_by or "")
-        current.add("ascending", ascending or True)
-        current.add("distinct", distinct or False)
-        current.add("columns", columns or [])
-        current.add("batch_size", batch_size or "")
-        current.add("comment", "Initialized")
+        current = {
+            "created": self._now()[0],
+            "format": format or None,
+            "compression": compression or None,
+            "partitioning": partitioning or None,
+            "sort_by": sort_by or None,
+            "ascending": ascending or True,
+            "distinct": distinct or False,
+            "columns": columns or [],
+            "batch_size": batch_size or None,
+            "comment": "initialized",
+        }
 
         # move files to current
-        self._mv(self._path, os.path.join(self._path, "current"))
+        self._mv(self._path, os.path.join(self._path, "current"), format=format)
 
-        self.config.add("current", current)
+        self.config["current"] = current
         self.write()
 
-    def update(self, snapshot: str | None = None, **kwargs):
+    def update(self, snapshot: str | None = None, **kwargs) -> None:
         snapshot = snapshot or "current"
         self.config[snapshot].update(**kwargs)
         self.write()
@@ -164,75 +171,112 @@ class TimeFly:
         columns: list | None = None,
         batch_size: int | str | None = None,
         comment: str | None = None,
-    ):
-        snapshot = tomlkit.table()
-        now = self._now()
-        snapshot.add("creaded", now[0])
-        snapshot.add("format", format or self.config["current"]["format"])
-        snapshot.add(
-            "compression", compression or self.config["current"]["compression"]
-        )
-        snapshot.add(
-            "partitioning", partitioning or self.config["current"]["partitioning"]
-        )
-        snapshot.add("sort_by", sort_by or self.config["current"]["sort_by"])
-        snapshot.add("ascending", ascending or self.config["current"]["ascending"])
-        snapshot.add("distinct", distinct or self.config["current"]["distinct"])
-        snapshot.add("columns", columns or self.config["current"]["columns"])
-        snapshot.add("batch_size", batch_size or self.config["current"]["batch_size"])
-        snapshot.add("comment", comment or "")
+    ) -> None:
+        if not "snapshot" in self.config:
+            self.config["snapshot"] = {}
+            self.config["snapshot"]["available"] = []
+            self.config["snapshot"]["deleted"] = []
 
-        self.config.add(f"snapshot.{now[1]}", snapshot)
-        self._cp(os.path.join(self._path, "current"), os.path.join(self._path, "snapshot", now[1]))
+        now = self._now()
+
+        snapshot = {
+            "creaded": now[0],
+            "format": format or self.config["current"]["format"],
+            "compression": compression or self.config["current"]["compression"],
+            "partitioning": partitioning or self.config["current"]["partitioning"],
+            "sort_by": sort_by or self.config["current"]["sort_by"],
+            "ascending": ascending or self.config["current"]["ascending"],
+            "distinct": distinct or self.config["current"]["distinct"],
+            "columns": columns or self.config["current"]["columns"],
+            "batch_size": batch_size or self.config["current"]["batch_size"],
+            "comment": comment or "",
+        }
+
+        self.config["snapshot"][now[1]] = snapshot
+        self.config["snapshot"]["available"].append(now[1])
+
+        self._cp(
+            os.path.join(self._path, "current"),
+            os.path.join(self._path, "snapshot", now[1]),
+            format=format or self.config["current"]["format"],
+        )
         self.write()
 
-    def delete_snapshot(self, snapshot:str):
+    def delete_snapshot(self, snapshot: str) -> None:
         path = os.path.join(self._path, "snapshot", snapshot)
         self._rm(path=path)
-        self.config.drop("snapshot.")
+        self.config["snapshot"].pop(snapshot)
+        self.config["snapshot"]["available"].remove(snapshot)
+        self.config["snapshot"]["deleted"].append(snapshot)
 
-    def load_snapshot(self, snapshot:str):
+    @property
+    def available_snapshots(self):
+        if "snapshot" in self.config:
+            return self.config["snapshot"]["available"]
+
+    @property
+    def deleted_snapshots(self):
+        if "snapshot" in self.config:
+            return self.config["snapshot"]["deleted"]
+
+    def load_snapshot(self, snapshot: str):
         pass
 
-    def _mv(self, path1:str, path2:str, format:str):
-        if hasattr(self._fs, "has_s5cmd"):
-            if self._fs.has_s5cmd and self._profile is not None:
+    def _mv(self, path1: str, path2: str, format: str) -> None:
+        if (
+            hasattr(self._fs, "has_s5cmd")
+            and self._fs.has_s5cmd
+            and self._protocol != "file"
+        ):
+            try:
                 self._fs.s5mv(
                     "s3://" + os.path.join(self._bucket or "", path1),
                     "s3://" + os.path.join(self._bucket or "", path2),
                     recursive=True,
                     exclude="_timefly.toml",
                 )
-            else:
+            except:
                 files = self._fs.glob(os.path.join(path1, f"**.{format}"))
                 path2 = path2.lstrip("/") + "/"
-                self._fs.mv(path1, path2, recursive=True)
+                if not self._fs.exists(path2):
+                    self._fs.mkdir(path2)
+                self._fs.mv(files, path2, recursive=True)
         else:
             files = self._fs.glob(os.path.join(path1, f"**.{format}"))
             path2 = path2.lstrip("/") + "/"
-            self._fs.mv(path1, path2, recursive=True)
+            if not self._fs.exists(path2):
+                self._fs.mkdir(path2)
+            self._fs.mv(files, path2, recursive=True)
 
-    def _cp(self, path1:str, path2:str, format:str):
-        if hasattr(self._fs, "has_s5cmd"):
-            if self._fs.has_s5cmd and self._profile is not None:
+    def _cp(self, path1: str, path2: str, format: str) -> None:
+        if (
+            hasattr(self._fs, "has_s5cmd")
+            and self._fs.has_s5cmd
+            and self._protocol != "file"
+        ):
+            try:
                 self._fs.s5cp(
                     "s3://" + os.path.join(self._bucket or "", path1),
                     "s3://" + os.path.join(self._bucket or "", path2),
                     recursive=True,
                     exclude="_timefly.toml",
                 )
-            else:
+            except:
                 files = self._fs.glob(os.path.join(path1, f"**.{format}"))
                 path2 = path2.lstrip("/") + "/"
+                if not self._fs.exists(path2):
+                    self._fs.mkdir(path2)
                 self._fs.cp(files, path2, recursive=True)
+
         else:
             files = self._fs.glob(os.path.join(path1, f"**.{format}"))
             path2 = path2.lstrip("/") + "/"
-            self._fs.cp(path1, path2, recursive=True)
-    
-    def _rm(self, path:str):
+            if not self._fs.exists(path2):
+                self._fs.mkdir(path2)
+            self._fs.cp(files, path2, recursive=True)
+
+    def _rm(self, path: str) -> None:
         self._fs.rm(path, recursive=True)
-    
 
 
 # class Reader(DatasetReader):
@@ -302,7 +346,7 @@ class TimeFly:
 
 #             all_timestamps = [
 #                 dt.datetime.strptime(subpath, "%Y%m%d_%H%M%S")
-#                 for subpath in self._snapshot["dataset"]["subpaths"]["all"]
+#                 for subpath in self._"dataset"]["subpaths"]["all"]
 #             ]
 #             timefly_diff = sorted(
 #                 [

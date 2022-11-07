@@ -458,3 +458,36 @@ def get_storage_path_options(bucket: str | None, path: str | None, protocol: str
     path = infer_storage_options(path)["path"]
 
     return bucket, path, protocol
+
+
+class NestedDictReplacer:
+    def __init__(self, d:dict)->None:
+        self._d = d
+        
+    def _dict_replace_value(self, d:dict,old:str|None, new:str|None)->dict:
+        x = {}
+        for k, v in d.items():
+            if isinstance(v, dict):
+                v = self._dict_replace_value(v, old, new)
+            elif isinstance(v, list):
+                v = self._list_replace_value(v, old, new)
+            else:
+                v = v if v!= old else new
+            x[k] = v
+        return x
+
+    def _list_replace_value(self, l:list, old:str|None, new:str|None)->list:
+        x = []
+        for e in l:
+            if isinstance(e, list):
+                e = self._list_replace_value(e, old, new)
+            elif isinstance(e, dict):
+                e = self._dict_replace_value(e, old, new)
+            else:
+                e = e if e!= old else new
+            x.append(e)
+        return x
+
+    def replace(self, old:str|None, new:str|None)->dict:
+        d = self._d
+        return self._dict_replace_value(d, old, new)

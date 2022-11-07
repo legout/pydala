@@ -6,7 +6,6 @@ import pandas as pd
 import polars as pl
 import pyarrow as pa
 import pyarrow.dataset as ds
-import pyarrow.feather as pf
 import pyarrow.parquet as pq
 from fsspec import spec
 from pyarrow.fs import FileSystem
@@ -30,7 +29,7 @@ class Writer:
         base_path: str,
         bucket: str | None = None,
         partitioning: list | str | None = None,
-        hive_style: bool = True,
+        partitioning_flavor: str | None = None,
         format: str = "parquet",
         compression: str = "zstd",
         mode: str | None = "append",  # can be 'append', 'overwrite', 'raise'
@@ -80,7 +79,10 @@ class Writer:
         self._partitioning = (
             [partitioning] if isinstance(partitioning, str) else partitioning
         )
-        self._hive_style = hive_style
+        self._partitioning_flavor = partitioning_flavor
+        if self._partitioning_flavor is None and self._partitioning is not None:
+            self._partitioning_flavor = "hive"
+
         self._format = format
         self._compression = compression
         self._base_name = base_name
@@ -116,6 +118,42 @@ class Writer:
 
     def drop(self, columns: str | list | None):
         self._drop = columns
+
+        return self
+
+    def partitioning(
+        self, columns: str | list | None = None, flavor: str | None = None
+    ):
+        if columns is not None:
+            if isinstance(columns, str):
+                columns = [columns]
+            self._partitioning = columns
+
+        if flavor is not None:
+            self._partitioning_flavor = flavor
+
+        return self
+
+    def compression(self, value: str | None = None):
+        self._compression = value
+
+        return self
+
+    def format(self, value: str | None = None):
+        if value is not None:
+            self._format = value
+
+        return self
+
+    def mode(self, value: str | None):
+        if value is not None:
+            if value not in ["overwrite", "append", "raise"]:
+                raise ValueError(
+                    "Value for mode must be 'overwrite', 'raise' or 'append'."
+                )
+            else:
+                self._mode = value
+
         return self
 
     def _gen_path(self, partition_names: tuple | None = None):
@@ -123,7 +161,7 @@ class Writer:
             return self._base_path
 
         if partition_names is not None:
-            if self._hive_style:
+            if self._partitioning_flavor == "hive":
                 hive_partitions = [
                     "=".join(part) for part in zip(self._partitioning, partition_names)
                 ]
@@ -211,6 +249,32 @@ class Writer:
 
         return table
 
+    def iter_batches(self, table:duckdb.DuckDBPyRelation, batch_size:int|str|None, datetime_column:str|None=None):
+
+        if isinstance(batch_size, int):
+            for i in range(table.shape[0] // batch_size + 1):
+                yield table.limit(batch_size, offset=i*batch_size)
+                
+        elif isinstance(batch_size, str):
+            if datetime_column is None:
+                raise TypeError("datetime_column must be not None")
+            if datetime_column not in table.columns:
+                raise ValueError(f"{datetime_column} not found. Possible table columns are {', '.join(table.columns)}.")
+
+            if "d" in batch_size.lower():
+                
+                val = int(batch_size.lower().split("d")[0])
+                freq = "DAY"
+
+            if "h" in batch_size.lower():
+                if "m" in batch
+                
+           
+                
+    
+            
+
+
     def write_table(
         self,
         table: pa.Table,
@@ -259,8 +323,9 @@ class Writer:
         | pd.DataFrame
         | pl.DataFrame
         | str,
-        batch_size: int | None = None,
+        batch_size: int | str| None = None,
         row_group_size: int | None = None,
+        datetime_column:str|None=None
         **kwargs,
     ):
 

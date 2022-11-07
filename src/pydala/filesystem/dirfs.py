@@ -37,7 +37,7 @@ class DirFileSystem(DirFileSystem):
 
         return self._has_s5cmd
 
-    def sync(self, src: str, dest: str, recursive=True, exclude:str|None=None):
+    def sync(self, src: str, dest: str, recursive=True, exclude: str | None = None):
         if self.has_s5cmd:
             src_path = infer_storage_options(src)["path"]
 
@@ -50,13 +50,19 @@ class DirFileSystem(DirFileSystem):
                 src = src.lstrip("/") + "/*"
 
             if exclude is None:
-                res = subprocess.run(f"s5cmd sync {src} {dest}", shell=True)
+                res = subprocess.run(
+                    f"s5cmd sync {src} {dest}", shell=True, capture_output=True
+                )
             else:
-                res = subprocess.run(f's5cmd sync --exclude "{exclude}" {src} {dest}', shell=True)
+                res = subprocess.run(
+                    f's5cmd sync --exclude "{exclude}" {src} {dest}',
+                    shell=True,
+                    capture_output=True,
+                )
 
-            return res
+            #return res
 
-    def s5cp(self, src: str, dest: str, recursive=True, exclude:str|None=None):
+    def s5cp(self, src: str, dest: str, recursive=True, exclude: str | None = None):
         if self.has_s5cmd:
             src_path = infer_storage_options(src)["path"]
 
@@ -69,12 +75,18 @@ class DirFileSystem(DirFileSystem):
                 src = src.lstrip("/") + "/*"
 
             if exclude is None:
-                res = subprocess.run(f"s5cmd cp {src} {dest}", shell=True)
+                res = subprocess.run(
+                    f"s5cmd cp {src} {dest}", shell=True, capture_output=True
+                )
             else:
-                res = subprocess.run(f's5cmd cp --exclude "{exclude}" {src} {dest}', shell=True)
-            return res
+                res = subprocess.run(
+                    f's5cmd cp --exclude "{exclude}" {src} {dest}',
+                    shell=True,
+                    capture_output=True,
+                )
+            #return res
 
-    def s5mv(self, src: str, dest: str, recursive=True, exclude:str|None=None):
+    def s5mv(self, src: str, dest: str, recursive=True, exclude: str | None = None):
         if self.has_s5cmd:
             src_path = infer_storage_options(src)["path"]
 
@@ -87,10 +99,16 @@ class DirFileSystem(DirFileSystem):
                 src = src.lstrip("/") + "/*"
 
             if exclude is None:
-                res = subprocess.run(f"s5cmd mv {src} {dest}", shell=True)
+                res = subprocess.run(
+                    f"s5cmd mv {src} {dest}", shell=True, capture_output=True
+                )
             else:
-                res = subprocess.run(f's5cmd mv --exclude "{exclude}" {src} {dest}', shell=True)
-            return res
+                res = subprocess.run(
+                    f's5cmd mv --exclude "{exclude}" {src} {dest}',
+                    shell=True,
+                    capture_output=True,
+                )
+            #return res
 
     def invalidate_cache(self, path=None):
         return self.fs.invalidate_cache(path=path)
