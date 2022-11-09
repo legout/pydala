@@ -13,16 +13,16 @@ from fsspec import spec
 from pyarrow.fs import FileSystem
 
 from .helper import (
+    convert_size_unit,
     distinct_table,
     drop_columns,
     get_ddb_sort_str,
+    get_filesystem,
+    get_storage_path_options,
     sort_table,
     to_pandas,
     to_polars,
     to_relation,
-    get_filesystem,
-    convert_size_unit,
-    get_storage_path_options
 )
 
 
@@ -163,7 +163,7 @@ class Reader:
 
         if hasattr(self._fs, "has_s5cmd"):
             if self._fs.has_s5cmd and self._profile is not None:
-                self._fs.sync(
+                self._fs.fs.sync(
                     "s3://" + os.path.join(self._bucket or "", self._path),
                     os.path.join(
                         self._cache_bucket,
@@ -370,11 +370,13 @@ class Reader:
                 sql += f" ORDER BY {sort_by}"
 
             if self._drop is not None:
-                if isinstance(drop, str):
-                    drop = [drop]
-                drop = [col for col in drop if col in self._dataset.schema.names]
-
-                sql = sql.replace("SELECT *", f"SELECT * exclude({','.join(drop)})")
+                if isinstance(self._drop, str):
+                    self._drop = [self._drop]
+                drop = [col for col in self._drop if col in self._dataset.schema.names]
+                
+                if len(drop)>0:
+                    sql = sql.replace("SELECT *", f"SELECT * exclude({','.join(drop)})")
+                    
 
             if self._distinct:
                 sql = sql.replace("SELECT *", "SELECT DISTINCT *")
@@ -484,8 +486,12 @@ class Reader:
                 sql = sql.replace("SELECT *", "SELECT DISTINCT *")
 
             table = self.ddb.execute(sql).arrow()
-        else:
+            
+        elif self.has_relation:
             table = self._rel
+
+        else:
+            table = self.mem_table
 
         self._pl_dataframe = sort_table(
             drop_columns(to_polars(table=table), columns=drop),

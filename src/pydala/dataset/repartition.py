@@ -1,17 +1,6 @@
-from re import S
-import duckdb
-import pandas as pd
-import polars as pl
-import pyarrow as pa
-import pyarrow.dataset as ds
-import pyarrow.fs as pafs
-import s3fs
-import uuid
 
 from .reader import Reader
 from .writer import Writer
-from ..filesystem import path_exists, delete
-from .utils import get_tables_diff
 
 
 class Repartition:
@@ -29,10 +18,13 @@ class Repartition:
         self._source_table = source_table
         self._row_group_size = None
         self._batch_size = None
+        self._overwrite = False
+        self._mode = "raise"
 
     def read(self):
 
         if self._reader._path == self._writer._base_path:
+            self._writer._mode="overwrite"
 
             if self._caching_method == "local":
                 self._reader._to_cache()
@@ -65,6 +57,10 @@ class Repartition:
             )
 
         self._source = self._reader.rel
+
+    def _delete_source(self):
+        if self._reader.cached:
+            self._reader._fs.rm(self._reader._path, recursive=True)
 
     def sort(self, by: str | list | None, ascending: bool | list | None = None):
         self._writer._sort_by = by
@@ -152,6 +148,7 @@ class Repartition:
         compression: str | None = None,
         format: str | None = None,
         mode: str | None = None,
+        delete_source:bool=True
     ):
         self.sort(by=sort_by, ascending=ascending)
         self.distinct(value=distinct)
@@ -166,7 +163,13 @@ class Repartition:
             table=self._source,
             batch_size=self._batch_size,
             row_group_size=self._row_group_size,
+            
         )
+        if delete_source:
+            self._delete_source()
+        
+        
+        
 
 
 # class Repartition:

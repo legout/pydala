@@ -1,5 +1,6 @@
 import datetime as dt
 import os
+import re
 
 import duckdb
 import pandas as pd
@@ -13,10 +14,10 @@ from pyarrow.fs import FileSystem
 from .helper import (
     get_ddb_sort_str,
     get_filesystem,
+    get_storage_path_options,
     get_tables_diff,
     random_id,
     to_relation,
-    get_storage_path_options,
 )
 
 # from ..filesystem.filesystem import FileSystem
@@ -249,31 +250,72 @@ class Writer:
 
         return table
 
-    def iter_batches(self, table:duckdb.DuckDBPyRelation, batch_size:int|str|None, datetime_column:str|None=None):
+    def iter_batches(
+        self,
+        table: duckdb.DuckDBPyRelation,
+        batch_size: int | str | None,
+        datetime_column: str | None = None,
+    ):
 
         if isinstance(batch_size, int):
             for i in range(table.shape[0] // batch_size + 1):
-                yield table.limit(batch_size, offset=i*batch_size)
-                
+                yield table.limit(batch_size, offset=i * batch_size)
+
         elif isinstance(batch_size, str):
             if datetime_column is None:
                 raise TypeError("datetime_column must be not None")
             if datetime_column not in table.columns:
-                raise ValueError(f"{datetime_column} not found. Possible table columns are {', '.join(table.columns)}.")
+                raise ValueError(
+                    f"{datetime_column} not found. Possible table columns are {', '.join(table.columns)}."
+                )
 
-            if "d" in batch_size.lower():
-                
-                val = int(batch_size.lower().split("d")[0])
-                freq = "DAY"
+            unit = re.findall("[a-z]+", batch_size.lower())
+            val = re.findall("[0-9]+", batch_size)
 
-            if "h" in batch_size.lower():
-                if "m" in batch
-                
-           
-                
-    
-            
+            if unit in ["microseconds", "micro", "u"]:
+                interval = f"to_microseconds({val})"
 
+            elif unit in ["milliseconds", "milli", "ms"]:
+                interval = f"to_milliseconds({val})"
+
+            elif unit in ["seconds", "sec", "s"]:
+                interval = f"to_seconds({val})"
+
+            elif unit in ["miuntes", "min", "t"]:
+                interval = f"to_minutes({val})"
+
+            elif unit in ["hours", "h"]:
+                interval = f"to_hours({val})"
+
+            elif unit in ["days", "d"]:
+                interval = f"to_days({val})"
+
+            elif unit in ["months", "mo", "m"]:
+                interval = f"to_months({val})"
+
+            elif unit in ["years", "y", "a"]:
+                interval = f"to_years({val})"
+
+            start_time = table.min(datetime_column).fetchone()[0]
+            end_time = table.max(datetime_column).fetchone()[0]
+
+            i = 0
+            end = False
+            while not end:
+                filter = (
+                    f"{datetime_column} >= TIMESTAMP '{start_time}' + {i}*{interval} "
+                    f"AND {datetime_column} < TIMESTAMP '{start_time}' + {i+1}*{interval}"
+                )
+
+                table_part = table.filter(filter)
+                i += 1
+                if table_part.max(datetime_column) == end_time:
+                    end = True
+                    
+                yield table_part
+
+        else:
+            yield table
 
     def write_table(
         self,
@@ -323,10 +365,9 @@ class Writer:
         | pd.DataFrame
         | pl.DataFrame
         | str,
-        batch_size: int | str| None = None,
+        batch_size: int | str | None = None,
         row_group_size: int | None = None,
-        datetime_column:str|None=None
-        **kwargs,
+        datetime_column: str | None = None,**kwargs,
     ):
 
         self._table = to_relation(
@@ -362,11 +403,10 @@ class Writer:
                 # Write table for partition
 
                 if table_part.shape[0] > 0:
-                    for i in range(table_part.shape[0] // batch_size + 1):
+                    #for i in range(table_part.shape[0] // batch_size + 1):
+                    for table_ in self.iter_batches(table=table_part, batch_size=batch_size, datetime_column=datetime_column):
                         self.write_table(
-                            table=table_part.limit(
-                                batch_size, offset=i * batch_size
-                            ).arrow(),
+                            table = table_.arrow(),
                             path=self._gen_path(partition_names=partition_names),
                             row_group_size=row_group_size,
                             **kwargs,
@@ -380,11 +420,9 @@ class Writer:
             # write table
 
             if self._table.shape[0] > 0:
-                for i in range(self._table.shape[0] // batch_size + 1):
+                for table_ in self.iter_batches(table=self._table, batch_size=batch_size, datetime_column=datetime_column):
                     self.write_table(
-                        table=self._table.limit(
-                            batch_size, offset=i * batch_size
-                        ).arrow(),
+                        table=table_.arrow(),
                         path=self._gen_path(partition_names=None),
                         row_group_size=row_group_size,
                         **kwargs,

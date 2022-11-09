@@ -1,6 +1,7 @@
 import datetime as dt
 import os
 
+import duckdb
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 import rtoml
@@ -8,7 +9,7 @@ from fsspec import spec
 from pyarrow.fs import FileSystem
 
 from .helper import NestedDictReplacer, get_filesystem, get_storage_path_options
-from .reader import Reader as DatasetReader
+from .reader import Reader
 from .writer import Writer
 
 
@@ -26,7 +27,7 @@ class TimeFly:
         self._bucket, self._path, self._protocol = get_storage_path_options(
             bucket=bucket, path=path, protocol=protocol
         )
-        self._config_path = os.path.join(path, "_timefly.toml")
+        self._config_path = os.path.join(path, "_dataset.toml")
         self._profile = profile
         self._endpoint_url = endpoint_url
         self._storage_options = storage_options
@@ -64,7 +65,15 @@ class TimeFly:
     @staticmethod
     def _now() -> tuple[dt.datetime, str]:
         now = dt.datetime.utcnow().replace(microsecond=0)
-        return now, now.strftime("%Y%m%d_%H%M%S")
+        return now
+
+    @staticmethod
+    def _snapshot_to_timestamp(snapshot: str) -> dt.datetime:
+        return dt.datetime.strptime(snapshot, "%Y%m%d_%H%M%S")
+
+    @staticmethod
+    def _timestamp_to_snapshot(ts: dt.datetime) -> str:
+        return ts.strftime("%Y%m%d_%H%M%S")
 
     def infer_format(self):
         return self._fs.glob(os.path.join(self._path, "**"))[-1].split(".")[-1]
@@ -102,7 +111,7 @@ class TimeFly:
         self.config = {}
         dataset = {
             "name": name,
-            "init": self._now()[0],
+            "init": self._now(),
             "description": description or "",
             "bucket": self._bucket or None,
             "path": self._path or None,
@@ -137,7 +146,7 @@ class TimeFly:
                 compression = self.infer_compression()
 
         current = {
-            "created": self._now()[0],
+            "created": self._now(),
             "format": format or None,
             "compression": compression or None,
             "partitioning": partitioning or None,
@@ -180,7 +189,7 @@ class TimeFly:
         now = self._now()
 
         snapshot = {
-            "creaded": now[0],
+            "creaded": now,
             "format": format or self.config["current"]["format"],
             "compression": compression or self.config["current"]["compression"],
             "partitioning": partitioning or self.config["current"]["partitioning"],
@@ -192,12 +201,12 @@ class TimeFly:
             "comment": comment or "",
         }
 
-        self.config["snapshot"][now[1]] = snapshot
-        self.config["snapshot"]["available"].append(now[1])
+        self.config["snapshot"][self._timestamp_to_snapshot(now)] = snapshot
+        self.config["snapshot"]["available"].append(self._timestamp_to_snapshot(now))
 
         self._cp(
             os.path.join(self._path, "current"),
-            os.path.join(self._path, "snapshot", now[1]),
+            os.path.join(self._path, "snapshot", self._timestamp_to_snapshot(now)),
             format=format or self.config["current"]["format"],
         )
         self.write()
@@ -219,6 +228,24 @@ class TimeFly:
         if "snapshot" in self.config:
             return self.config["snapshot"]["deleted"]
 
+    def _find_snapshot_subpath(self, timefly: dt.datetime | None):
+
+        if timefly is not None:
+            available_snapshots = sorted(
+                map(
+                    self._snapshot_to_timestamp,
+                    self.config["snapshot"]["available"],
+                )
+            )
+            snapshot_subpath = self._timestamp_to_snapshot(
+                [snapshot for snapshot in available_snapshots if snapshot > timefly][0]
+            )
+
+        else:
+            snapshot_subpath = "current"
+
+        return snapshot_subpath
+
     def load_snapshot(self, snapshot: str):
         pass
 
@@ -233,7 +260,7 @@ class TimeFly:
                     "s3://" + os.path.join(self._bucket or "", path1),
                     "s3://" + os.path.join(self._bucket or "", path2),
                     recursive=True,
-                    exclude="_timefly.toml",
+                    exclude="_dataset.toml",
                 )
             except:
                 files = self._fs.glob(os.path.join(path1, f"**.{format}"))
@@ -259,7 +286,7 @@ class TimeFly:
                     "s3://" + os.path.join(self._bucket or "", path1),
                     "s3://" + os.path.join(self._bucket or "", path2),
                     recursive=True,
-                    exclude="_timefly.toml",
+                    exclude="_dataset.toml",
                 )
             except:
                 files = self._fs.glob(os.path.join(path1, f"**.{format}"))
@@ -279,91 +306,123 @@ class TimeFly:
         self._fs.rm(path, recursive=True)
 
 
-# class Reader(DatasetReader):
-#     def __init__(
-#         self,
-#         snapshot: str,
-#         path: str,
-#         bucket: str | None = None,
-#         name: str | None = None,
-#         partitioning: ds.Partitioning | list | str | None = None,
-#         format: str | None = "parquet",
-#         sort_by: str | list | None = None,
-#         ascending: bool | list | None = None,
-#         distinct: bool | None = None,
-#         drop: str | list | None = "__index_level_0__",
-#         ddb: duckdb.DuckDBPyConnection | None = None,
-#         caching: bool = False,
-#         cache_storage: str | None = "/tmp/pydala/",
-#         protocol: str | None = None,
-#         profile: str | None = None,
-#         endpoint_url: str | None = None,
-#         storage_options: dict = {},
-#         fsspec_fs: spec.AbstractFileSystem | None = None,
-#         pyarrow_fs: FileSystem | None = None,
-#         use_pyarrow_fs: bool = False,
-#     ):
+class TimeFlyReader(Reader):
+    def __init__(
+        self,
+        base_path: str,
+        timefly: str | dt.datetime | None = None,
+        bucket: str | None = None,
+        name: str | None = None,
+        partitioning: ds.Partitioning | list | str | None = None,
+        format: str | None = "parquet",
+        sort_by: str | list | None = None,
+        ascending: bool | list | None = None,
+        distinct: bool | None = None,
+        drop: str | list | None = "__index_level_0__",
+        ddb: duckdb.DuckDBPyConnection | None = None,
+        caching: bool = False,
+        cache_storage: str | None = "/tmp/pydala/",
+        protocol: str | None = None,
+        profile: str | None = None,
+        endpoint_url: str | None = None,
+        storage_options: dict = {},
+        fsspec_fs: spec.AbstractFileSystem | None = None,
+        pyarrow_fs: FileSystem | None = None,
+        use_pyarrow_fs: bool = False,
+    ) -> None:
+        self._base_path = base_path
+        self.timefly = TimeFly(
+            path=self._base_path,
+            bucket=bucket,
+            fsspec_fs=fsspec_fs,
+            protocol=protocol,
+            profile=profile,
+            endpoint_url=endpoint_url,
+            storage_options=storage_options,
+        )
+        if timefly is not None:
+            self._timefly = (
+                timefly
+                if isinstance(timefly, dt.datetime)
+                else dt.datetime.fromisoformat(timefly)
+            )
+        else:
+            self._timefly = None
+        self._snapshot_path = self.timefly._find_snapshot_subpath(timefly=self._timefly)
+        self._path = os.path.join(self._base_path, self._snapshot_path)
 
-#         # self.config = ConfigReader(filesystem=filesystem, path=path, bucket=bucket)
+        super().__init__(
+            path=self._path,
+            bucket=bucket,
+            name=name,
+            partitioning=partitioning,
+            format=format,
+            sort_by=sort_by,
+            ascending=ascending,
+            distinct=distinct,
+            drop=drop,
+            ddb=ddb,
+            caching=caching,
+            cache_storage=cache_storage,
+            protocol=protocol,
+            profile=profile,
+            endpoint_url=endpoint_url,
+            storage_options=storage_options,
+            fsspec_fs=fsspec_fs,
+            pyarrow_fs=pyarrow_fs,
+            use_pyarrow_fs=use_pyarrow_fs,
+        )
 
-#         if self.config is not None:
-#             subpath = self._find_timefly_subpath(timefly=timefly)
-#             path = os.path.join(path, subpath)
-#         else:
-#             self.config = False
-
-#         super().__init__(
-#             path=path,
-#             bucket=bucket,
-#             name=name,
-#             partitioning=partitioning,
-#             format=format,
-#             sort_by=sort_by,
-#             ascending=ascending,
-#             distinct=distinct,
-#             drop=drop,
-#             ddb=ddb,
-#             caching=caching,
-#             cache_storage=cache_storage,
-#             protocol=protocol,
-#             profile=profile,
-#             endpoint_url=endpoint_url,
-#             storage_options=storage_options,
-#             fsspec_fs=fsspec_fs,
-#             pyarrow_fs=pyarrow_fs,
-#             use_pyarrow_fs=use_pyarrow_fs,
-#         )
-
-#     def _find_snapshot_subpath(self, timefly: str | dt.datetime | None):
-
-#         timefly = timefly or "current"
-
-#         if timefly != "current":
-#             if isinstance(timefly, str):
-#                 timefly_timestamp = dt.datetime.strptime(timefly, "%Y%m%d_%H%M%S")
-#             else:
-#                 timefly_timestamp = timefly
-
-#             all_timestamps = [
-#                 dt.datetime.strptime(subpath, "%Y%m%d_%H%M%S")
-#                 for subpath in self._"dataset"]["subpaths"]["all"]
-#             ]
-#             timefly_diff = sorted(
-#                 [
-#                     timefly_timestamp - timestamp
-#                     for timestamp in all_timestamps
-#                     if timestamp < timefly_timestamp
-#                 ]
-#             )[0]
-#             timefly_subpath = (timefly_timestamp - timefly_diff).strftime(
-#                 "%Y%m%d_%H%M%S"
-#             )
-
-#         else:
-#             timefly_subpath = "current"
-
-#         return os.path.join(self._path, timefly_subpath)
+    def set_snapshot(self, snapshot):
+        self._snapshot_path = self.timefly._find_snapshot_subpath(snapshot)
+        self._path = os.path.join(self._base_path, self._snapshot_path)
+        if self.has_dataset:
+            del self._dataset
+            self.set_dataset()
+        if self.has_mem_table:
+            del self._mem_table
+            self.load_mem_table()
+        if self.has_pd_dataframe:
+            del self._pd_dataframe
+            self.to_pandas()
+        if self.has_pl_dataframe:
+            del self._pl_dataframe
+            self.to_polars()
+        if self.has_relation:
+            del self._rel
+            self.to_relation()
+        if self.has_temp_table:
+            self.ddb.query(f"DROP TABLE {self._tables['temp_table']}")
+            self.create_temp_table()
 
 
-# class DatasetWriter(Writer):
-#     pass
+
+
+
+class TimeFlyWriter(Writer):
+    def __init__(
+        self,
+        base_path: str,
+        bucket: str | None = None,
+        partitioning: list | str | None = None,
+        partitioning_flavor: str | None = None,
+        format: str = "parquet",
+        compression: str = "zstd",
+        mode: str | None = "append",  # can be 'append', 'overwrite', 'raise'
+        sort_by: str | list | None = None,
+        ascending: bool | list | None = None,
+        distinct: bool | None = None,
+        drop: str | list | None = "__index_level_0__",
+        ddb: duckdb.DuckDBPyConnection | None = None,
+        cache_storage: str | None = "/tmp/pydala/",
+        protocol: str | None = None,
+        profile: str | None = None,
+        endpoint_url: str | None = None,
+        storage_options: dict = {},
+        base_name: str = "data",
+        fsspec_fs: spec.AbstractFileSystem | None = None,
+        pyarrow_fs: FileSystem | None = None,
+        use_pyarrow_fs: bool = False,
+        ):
+        pass
+        

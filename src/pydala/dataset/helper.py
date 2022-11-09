@@ -401,6 +401,9 @@ def drop_columns(
     | ds.FileSystemDataset,
     columns: str | list | None = None,
 ) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
+    if isinstance(columns, str):
+        columns = [columns]
+        
     if columns is not None:
         if isinstance(table, (pa.Table, pl.DataFrame, pd.DataFrame)):
             columns = [col for col in columns if col in table.column_names]
@@ -447,7 +450,9 @@ def convert_size_unit(size, unit="MB"):
         return round(size / 1024**5, 1)
 
 
-def get_storage_path_options(bucket: str | None, path: str | None, protocol: str | None):
+def get_storage_path_options(
+    bucket: str | None, path: str | None, protocol: str | None
+):
     if bucket is not None:
         protocol = protocol or infer_storage_options(bucket)["protocol"]
         bucket = infer_storage_options(bucket)["path"]
@@ -461,10 +466,10 @@ def get_storage_path_options(bucket: str | None, path: str | None, protocol: str
 
 
 class NestedDictReplacer:
-    def __init__(self, d:dict)->None:
+    def __init__(self, d: dict) -> None:
         self._d = d
-        
-    def _dict_replace_value(self, d:dict,old:str|None, new:str|None)->dict:
+
+    def _dict_replace_value(self, d: dict, old: str | None, new: str | None) -> dict:
         x = {}
         for k, v in d.items():
             if isinstance(v, dict):
@@ -472,11 +477,11 @@ class NestedDictReplacer:
             elif isinstance(v, list):
                 v = self._list_replace_value(v, old, new)
             else:
-                v = v if v!= old else new
+                v = v if v != old else new
             x[k] = v
         return x
 
-    def _list_replace_value(self, l:list, old:str|None, new:str|None)->list:
+    def _list_replace_value(self, l: list, old: str | None, new: str | None) -> list:
         x = []
         for e in l:
             if isinstance(e, list):
@@ -484,10 +489,10 @@ class NestedDictReplacer:
             elif isinstance(e, dict):
                 e = self._dict_replace_value(e, old, new)
             else:
-                e = e if e!= old else new
+                e = e if e != old else new
             x.append(e)
         return x
 
-    def replace(self, old:str|None, new:str|None)->dict:
+    def replace(self, old: str | None, new: str | None) -> dict:
         d = self._d
         return self._dict_replace_value(d, old, new)
