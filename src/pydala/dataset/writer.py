@@ -270,7 +270,17 @@ class Writer:
                 )
 
             unit = re.findall("[a-z]+", batch_size.lower())
+            if len(unit)>0:
+                unit = unit[0]
+            else:
+                unit="y"
+                
             val = re.findall("[0-9]+", batch_size)
+            if len(val)>0:
+                val = int(val[0])
+            else:
+                val=1
+            print(unit)
 
             if unit in ["microseconds", "micro", "u"]:
                 interval = f"to_microseconds({val})"
@@ -296,6 +306,8 @@ class Writer:
             elif unit in ["years", "y", "a"]:
                 interval = f"to_years({val})"
 
+            print(interval)
+
             start_time = table.min(datetime_column).fetchone()[0]
             end_time = table.max(datetime_column).fetchone()[0]
 
@@ -309,9 +321,11 @@ class Writer:
 
                 table_part = table.filter(filter)
                 i += 1
-                if table_part.max(datetime_column) == end_time:
+                if table_part.max(datetime_column).fetchone()[0] == end_time:
                     end = True
-                    
+                elif i==1000:
+                    end=True
+
                 yield table_part
 
         else:
@@ -367,7 +381,8 @@ class Writer:
         | str,
         batch_size: int | str | None = None,
         row_group_size: int | None = None,
-        datetime_column: str | None = None,**kwargs,
+        datetime_column: str | None = None,
+        **kwargs,
     ):
 
         self._table = to_relation(
@@ -403,10 +418,14 @@ class Writer:
                 # Write table for partition
 
                 if table_part.shape[0] > 0:
-                    #for i in range(table_part.shape[0] // batch_size + 1):
-                    for table_ in self.iter_batches(table=table_part, batch_size=batch_size, datetime_column=datetime_column):
+                    # for i in range(table_part.shape[0] // batch_size + 1):
+                    for table_ in self.iter_batches(
+                        table=table_part,
+                        batch_size=batch_size,
+                        datetime_column=datetime_column,
+                    ):
                         self.write_table(
-                            table = table_.arrow(),
+                            table=table_.arrow(),
                             path=self._gen_path(partition_names=partition_names),
                             row_group_size=row_group_size,
                             **kwargs,
@@ -420,7 +439,11 @@ class Writer:
             # write table
 
             if self._table.shape[0] > 0:
-                for table_ in self.iter_batches(table=self._table, batch_size=batch_size, datetime_column=datetime_column):
+                for table_ in self.iter_batches(
+                    table=self._table,
+                    batch_size=batch_size,
+                    datetime_column=datetime_column,
+                ):
                     self.write_table(
                         table=table_.arrow(),
                         path=self._gen_path(partition_names=None),

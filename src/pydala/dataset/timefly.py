@@ -246,8 +246,28 @@ class TimeFly:
 
         return snapshot_subpath
 
-    def load_snapshot(self, snapshot: str):
-        pass
+    def load_snapshot(self, snapshot: str|dt.datetime):
+        snapshot = self._find_snapshot_subpath(snapshot)
+
+        current =  {
+            "created": self.config["snapshot"][snapshot]["created"],
+            "format": self.config["snapshot"][snapshot]["format"],
+            "compression": self.config["snapshot"][snapshot]["compression"],
+            "partitioning": self.config["snapshot"][snapshot]["partitioning"],
+            "sort_by":self.config["snapshot"][snapshot]["sort_by"],
+            "ascending": self.config["snapshot"][snapshot]["ascending"],
+            "distinct": self.config["snapshot"][snapshot]["distinct"],
+            "columns": self.config["snapshot"][snapshot]["columns"],
+            "batch_size": self.config["snapshot"][snapshot]["batch_size"],
+            "comment": f"Restored from snapshot {snapshot}",
+        }
+        self.config["current"] = current
+        self._cp(
+            os.path.join(self._path, "snapshot", snapshot),
+            os.path.join(self._path, "current"),
+            format=format or self.config["snapshot"][snapshot]["format"],
+        )
+        self.write()
 
     def _mv(self, path1: str, path2: str, format: str) -> None:
         if (

@@ -1,7 +1,6 @@
-
 from .reader import Reader
 from .writer import Writer
-
+from .helper import get_ddb_sort_str
 
 class Repartition:
     def __init__(
@@ -24,7 +23,7 @@ class Repartition:
     def read(self):
 
         if self._reader._path == self._writer._base_path:
-            self._writer._mode="overwrite"
+            self._writer._mode = "overwrite"
 
             if self._caching_method == "local":
                 self._reader._to_cache()
@@ -148,7 +147,8 @@ class Repartition:
         compression: str | None = None,
         format: str | None = None,
         mode: str | None = None,
-        delete_source:bool=True
+        delete_source: bool = True,
+        datetime_column: str | None = None,
     ):
         self.sort(by=sort_by, ascending=ascending)
         self.distinct(value=distinct)
@@ -163,13 +163,10 @@ class Repartition:
             table=self._source,
             batch_size=self._batch_size,
             row_group_size=self._row_group_size,
-            
+            datetime_column=datetime_column,
         )
         if delete_source:
             self._delete_source()
-        
-        
-        
 
 
 # class Repartition:

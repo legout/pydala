@@ -167,7 +167,7 @@ class Reader:
                     "s3://" + os.path.join(self._bucket or "", self._path),
                     os.path.join(
                         self._cache_bucket,
-                        os.path.dirname(self._path) if not recursive else self._path,
+                        os.path.dirname(self._path) if not recursive else self._path
                     ),
                     recursive=recursive,
                 )

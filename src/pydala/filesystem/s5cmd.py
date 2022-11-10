@@ -124,7 +124,7 @@ class S5CmdFileSystem(S3FileSystem):
         stdout: str = stdout.decode().strip()
 
         if len(stdout) > 0:
-            stdout_json = [json.loads(e) for e in stdout.split()]
+            stdout_json = [json.loads(e) for e in stdout.split("\n")]
             res = [
                 out
                 for out in stdout_json
