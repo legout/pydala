@@ -416,6 +416,7 @@ class Reader:
                 distinct=self._distinct,
                 drop=self._drop,
             )
+            print("mem_table")
 
         elif self.has_temp_table:
 
@@ -429,6 +430,7 @@ class Reader:
 
             if sort_by is not None:
                 self._rel.order(self._sort_by_ddb)
+            print("temp_table")
 
         else:
             if not self.has_dataset:
@@ -442,6 +444,7 @@ class Reader:
                 distinct=self._distinct,
                 drop=self._drop,
             )
+            print("dataset")
 
         return self._rel
 

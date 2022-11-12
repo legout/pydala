@@ -280,7 +280,6 @@ class Writer:
                 val = int(val[0])
             else:
                 val=1
-            print(unit)
 
             if unit in ["microseconds", "micro", "u"]:
                 interval = f"to_microseconds({val})"
@@ -306,7 +305,6 @@ class Writer:
             elif unit in ["years", "y", "a"]:
                 interval = f"to_years({val})"
 
-            print(interval)
 
             start_time = table.min(datetime_column).fetchone()[0]
             end_time = table.max(datetime_column).fetchone()[0]
