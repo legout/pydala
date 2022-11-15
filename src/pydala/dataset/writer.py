@@ -11,15 +11,9 @@ import pyarrow.parquet as pq
 from fsspec import spec
 from pyarrow.fs import FileSystem
 
-from .helper import (
-    get_ddb_sort_str,
-    get_filesystem,
-    get_storage_path_options,
-    get_tables_diff,
-    random_id,
-    to_relation,
-)
-
+from .helper import (distinct_table, drop_columns, get_ddb_sort_str,
+                     get_filesystem, get_storage_path_options, get_tables_diff,
+                     random_id, sort_table, to_relation)
 # from ..filesystem.filesystem import FileSystem
 from .reader import Reader
 
@@ -213,21 +207,22 @@ class Writer:
                 return table
 
             elif self._mode == "append":
+                
                 if self._distinct:
 
                     existing_table = Reader(
                         path=path,
                         format=self._format,
-                        sort_by=self._sort_by,
-                        ascending=self._ascending,
-                        distinct=self._distinct,
-                        drop=self._drop,
+                        #sort_by=self._sort_by,
+                        #ascending=self._ascending,
+                        #distinct=self._distinct,
+                        #drop=self._drop,
                         ddb=self.ddb,
                         fsspec_fs=self._fs,
                         pyarrow_fs=self._pafs,
                         use_pyarrow_fs=self._use_pyarrow_fs,
                     )
-
+                    
                     if existing_table.disk_usage / 1024**2 <= 100:
                         return get_tables_diff(
                             table1=table,
@@ -383,13 +378,18 @@ class Writer:
         **kwargs,
     ):
 
+        table = sort_table(table, sort_by=self._sort_by, ascending=self._ascending, ddb=self.ddb)
+        table = drop_columns(table, columns=self._drop)
+        if self._distinct:
+            table = distinct_table(table, ddb=self.ddb)
+            
         self._table = to_relation(
             table=table,
             ddb=self.ddb,
-            sort_by=self._sort_by,
-            ascending=self._ascending,
-            distinct=self._distinct,
-            drop=self._drop,
+            #sort_by=self._sort_by,
+            #ascending=self._ascending,
+            #distinct=self._distinct,
+            #drop=self._drop,
         )
 
         if batch_size is None:

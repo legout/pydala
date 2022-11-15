@@ -160,22 +160,22 @@ def to_relation(
     | pl.DataFrame
     | str,
     ddb: duckdb.DuckDBPyConnection,
-    sort_by: str | list | None = None,
-    ascending: bool | list | None = None,
-    distinct: bool = False,
-    drop: str | list | None = None,
+    # sort_by: str | list | None = None,
+    # ascending: bool | list | None = None,
+    # distinct: bool = False,
+    # drop: str | list | None = None,
 ) -> duckdb.DuckDBPyRelation:
 
     if isinstance(table, pa.Table):
-        if distinct:
-            table = distinct_table(table)
+        # if distinct:
+        #    table = distinct_table(table)
 
-        if sort_by is not None:
-            table = sort_table(
-                drop_columns(table=table, columns=drop),
-                sort_by=sort_by,
-                ascending=ascending,
-            )
+        # if sort_by is not None:
+        #    table = sort_table(
+        #        drop_columns(table=table, columns=drop),
+        #        sort_by=sort_by,
+        #        ascending=ascending,
+        #    )
 
         return ddb.from_arrow(table)
 
@@ -183,42 +183,42 @@ def to_relation(
 
         table = ddb.from_arrow(table)
 
-        if distinct:
-            table = table.distinct()
+        # if distinct:
+        #    table = table.distinct()
 
-        if drop is not None:
-            table = drop_columns(table, columns=drop)
+        # if drop is not None:
+        #    table = drop_columns(table, columns=drop)
 
-        if sort_by is not None:
-            sort_by = get_ddb_sort_str(sort_by=sort_by, ascending=ascending)
-            table = table.order(sort_by)
+        # if sort_by is not None:
+        #    sort_by = get_ddb_sort_str(sort_by=sort_by, ascending=ascending)
+        #    table = table.order(sort_by)
 
         return table
 
     elif isinstance(table, pd.DataFrame):
 
-        if distinct:
-            table = distinct_table(table)
+        # if distinct:
+        #    table = distinct_table(table)
 
-        if sort_by is not None:
-            table = sort_table(
-                drop_columns(table, columns=drop), sort_by=sort_by, ascending=ascending
-            )
+        # if sort_by is not None:
+        #    table = sort_table(
+        #        drop_columns(table, columns=drop), sort_by=sort_by, ascending=ascending
+        #    )
 
         return ddb.from_df(table)
 
     elif isinstance(table, pl.DataFrame):
 
-        if distinct:
-            table = distinct_table(table)
+        # if distinct:
+        #    table = distinct_table(table)
 
-        if sort_by is not None:
-            table = sort_table(
-                drop_columns(table, columns=drop),
-                sort_by=sort_by,
-                ascending=ascending,
-                ddb=ddb,
-            )
+        # if sort_by is not None:
+        #    table = sort_table(
+        #        drop_columns(table, columns=drop),
+        #        sort_by=sort_by,
+        #        ascending=ascending,
+        #        ddb=ddb,
+        #    )
 
         return ddb.from_arrow(table.to_arrow())
 
@@ -230,27 +230,27 @@ def to_relation(
         else:
             table = ddb.query(f"SELECT * FROM '{table}'")
 
-        if distinct:
-            table = table.distinct()
+        # if distinct:
+        #    table = table.distinct()
 
-        if drop is not None:
-            table = drop_columns(table, columns=drop)
+        # if drop is not None:
+        #    table = drop_columns(table, columns=drop)
 
-        if sort_by is not None:
-            sort_by = get_ddb_sort_str(sort_by=sort_by, ascending=ascending)
-            table = table.order(sort_by)
+        # if sort_by is not None:
+        #    sort_by = get_ddb_sort_str(sort_by=sort_by, ascending=ascending)
+        #    table = table.order(sort_by)
 
         return table
 
     elif isinstance(table, duckdb.DuckDBPyRelation):
         table = table
 
-        if sort_by is not None:
-            sort_by = get_ddb_sort_str(sort_by=sort_by, ascending=ascending)
-            table = table.order(sort_by)
+        # if sort_by is not None:
+        #    sort_by = get_ddb_sort_str(sort_by=sort_by, ascending=ascending)
+        #    table = table.order(sort_by)
 
-        if distinct:
-            table = table.distinct()
+        # if distinct:
+        #    table = table.distinct()
 
         return table
 
@@ -309,6 +309,7 @@ def get_tables_diff(
     | duckdb.DuckDBPyRelation
     | ds.FileSystemDataset
     | str,
+    subset: list | None = None,
     ddb: duckdb.DuckDBPyConnection | None = None,
 ) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
 
@@ -318,7 +319,23 @@ def get_tables_diff(
     table1_ = to_relation(table1, ddb=ddb)
     table2_ = to_relation(table2, ddb=ddb)
 
-    diff = table1_.except_(table2_)
+    if subset:
+        subset_table1_ = table1_.project(",".join(subset))
+        subset_table2_ = table2_.project(",".join(subset))
+
+        # diff = subset_table1_.except_(subset_table2_).arrow().to_pylist()
+
+        diff = to_relation(
+            to_polars(table1).filter(
+                pl.struct(subset).is_in(
+                    subset_table1_.except_(subset_table2_).arrow().to_pylist()
+                )
+            ),
+            ddb=ddb,
+        )
+
+    else:
+        diff = table1_.except_(table2_.project(",".join(table1_.columns)))
 
     if isinstance(table1, (pa.Table, ds.FileSystemDataset)):
         return diff.arrow()
@@ -403,10 +420,16 @@ def drop_columns(
 ) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
     if isinstance(columns, str):
         columns = [columns]
-        
+
     if columns is not None:
-        if isinstance(table, (pa.Table, pl.DataFrame, pd.DataFrame)):
+        if isinstance(table, pa.Table):
             columns = [col for col in columns if col in table.column_names]
+            if len(columns) > 0:
+                return table.drop(columns=columns)
+            return table
+
+        elif isinstance(table, (pl.DataFrame, pd.DataFrame)):
+            columns = [col for col in columns if col in table.columns]
             if len(columns) > 0:
                 return table.drop(columns=columns)
             return table
@@ -428,6 +451,56 @@ def drop_columns(
             return table
     else:
         return table
+
+
+def pyarrow_schema_auto_conversion(schema1:pa.Schema, schema2:pa.Schema) -> pa.Schema:
+    schema = []
+    dtype_rank = [pa.int8(), pa.int16(), pa.int32(), pa.int64(), pa.float16(), pa.float32(), pa.float64(), pa.string()]
+    for name in schema1.names:
+        type1 = schema1.field(name).type
+        type2 = schema2.field(name).type
+        
+        if type1!=type2:
+            if type1 in dtype_rank:
+                rank1= dtype_rank.index(type1)
+            else:
+                rank1 = 0
+            if type2 in dtype_rank:
+                rank2 = dtype_rank.index(type2)
+            else:
+                rank2 = 0
+                
+            schema.append(pa.field(name, type1 if rank1>rank2 else type2))
+            
+        else:
+            schema.append(pa.field(name, type1))
+    
+    return pa.schema(schema)
+                    
+def polars_schema_auto_conversion(schema1:dict, schema2:dict)-> dict[str, pl.DataType]:
+    schema = {}
+    dtype_rank = [pl.Int8(), pl.Int16(), pl.Int32(), pl.Int64(), pl.Float32(), pl.Float64(), pl.Utf8()]
+    
+    for name in schema1:
+        type1 = schema1[name]
+        type2 = schema2[name]
+        
+        if type1!=type2:
+            if type1 in dtype_rank:
+                rank1= dtype_rank.index(type1)
+            else:
+                rank1 = 0
+            if type2 in dtype_rank:
+                rank2 = dtype_rank.index(type2)
+            else:
+                rank2 = 0
+                
+            schema[name] = type1 if rank1>rank2 else type2
+            
+        else:
+            schema[name] =  type1
+    return schema
+
 
 
 def random_id():

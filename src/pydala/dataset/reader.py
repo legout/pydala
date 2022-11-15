@@ -12,18 +12,10 @@ import pyarrow.parquet as pq
 from fsspec import spec
 from pyarrow.fs import FileSystem
 
-from .helper import (
-    convert_size_unit,
-    distinct_table,
-    drop_columns,
-    get_ddb_sort_str,
-    get_filesystem,
-    get_storage_path_options,
-    sort_table,
-    to_pandas,
-    to_polars,
-    to_relation,
-)
+from .helper import (convert_size_unit, distinct_table, drop_columns,
+                     get_ddb_sort_str, get_filesystem,
+                     get_storage_path_options, sort_table, to_pandas,
+                     to_polars, to_relation)
 
 
 class Reader:
@@ -90,7 +82,7 @@ class Reader:
             self.ddb = ddb
         else:
             self.ddb = duckdb.connect()
-        self.ddb.execute(f"SET temp_directory='{cache_storage}'")
+        self.ddb.execute(f"SET temp_directory='{os.path.join(cache_storage, 'duckdb')}'")
 
     def _set_paths(
         self,
@@ -109,7 +101,7 @@ class Reader:
 
             if cache_storage is not None:
                 os.makedirs(cache_storage, exist_ok=True)
-                self._cache_bucket = mkdtemp(prefix=cache_storage)
+                self._cache_bucket = os.path.join(cache_storage, "cache")
             else:
                 self._cache_bucket = mkdtemp()
         else:
@@ -411,10 +403,10 @@ class Reader:
             self._rel = to_relation(
                 table=self._mem_table,
                 ddb=self.ddb,
-                sort_by=self._sort_by,
-                ascending=self._ascending,
-                distinct=self._distinct,
-                drop=self._drop,
+                #sort_by=self._sort_by,
+                #ascending=self._ascending,
+                #distinct=self._distinct,
+                #drop=self._drop,
             )
             print("mem_table")
 
@@ -422,15 +414,15 @@ class Reader:
 
             self._rel = self.ddb.query(f"SELECT * FROM {self._tables['temp_table']}")
 
-            if distinct:
-                self._rel = self._rel.distinct()
+            #if distinct:
+            #    self._rel = self._rel.distinct()
 
-            if drop is not None:
-                self._rel = drop_columns(self._rel, columns=self._drop)
+            #if drop is not None:
+            #    self._rel = drop_columns(self._rel, columns=self._drop)
 
-            if sort_by is not None:
-                self._rel.order(self._sort_by_ddb)
-            print("temp_table")
+            #if sort_by is not None:
+            #    self._rel.order(self._sort_by_ddb)
+            #print("temp_table")
 
         else:
             if not self.has_dataset:
@@ -439,12 +431,18 @@ class Reader:
             self._rel = to_relation(
                 table=self._dataset,
                 ddb=self.ddb,
-                sort_by=self._sort_by,
-                ascending=self._ascending,
-                distinct=self._distinct,
-                drop=self._drop,
+                #sort_by=self._sort_by,
+                #ascending=self._ascending,
+                #distinct=self._distinct,
+                #drop=self._drop,
             )
-            print("dataset")
+            #print("dataset")
+
+        self._rel = sort_table(self._rel, sort_by=self._sort_by, ascending=self._ascending, ddb=self.ddb,)
+        self._rel = drop_columns(self._rel, columns=self._drop)
+
+        if self._distinct:
+            self._rel = distinct_table(self._rel, ddb=self.ddb)
 
         return self._rel
 
