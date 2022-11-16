@@ -5,20 +5,21 @@ import re
 import duckdb
 import pandas as pd
 import polars as pl
+import progressbar
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 from fsspec import spec
 from pyarrow.fs import FileSystem
 
-from .helper import (distinct_table, drop_columns, get_ddb_sort_str,
-                     get_filesystem, get_storage_path_options, get_tables_diff,
-                     random_id, sort_table, to_relation)
-# from ..filesystem.filesystem import FileSystem
+from ..utils.base import random_id
+from ..utils.table import get_tables_diff, to_relation
+from .base import BaseDataSet
 from .reader import Reader
+from .timefly import TimeFly
 
 
-class Writer:
+class Writer(BaseDataSet):
     def __init__(
         self,
         base_path: str,
@@ -27,11 +28,7 @@ class Writer:
         partitioning_flavor: str | None = None,
         format: str = "parquet",
         compression: str = "zstd",
-        mode: str | None = "append",  # can be 'append', 'overwrite', 'raise'
-        sort_by: str | list | None = None,
-        ascending: bool | list | None = None,
-        distinct: bool | None = None,
-        drop: str | list | None = "__index_level_0__",
+        mode: str | None = "delta",  # can be 'delta', 'append', 'overwrite', 'raise'
         ddb: duckdb.DuckDBPyConnection | None = None,
         cache_storage: str | None = "/tmp/pydala/",
         protocol: str | None = None,
@@ -43,88 +40,46 @@ class Writer:
         pyarrow_fs: FileSystem | None = None,
         use_pyarrow_fs: bool = False,
     ):
-        self._profile = profile
-        self._endpoint_url = endpoint_url
-        self._storage_options = storage_options
-        self._mode = mode
-        self._use_pyarrow_fs = use_pyarrow_fs
-
-        self._bucket, self._base_path, self._protocol = get_storage_path_options(
-            bucket=bucket, path=base_path, protocol=protocol
-        )
-
-        self._filesystem = get_filesystem(
-            bucket=self._bucket,
-            protocol=self._protocol,
-            profile=self._profile,
-            endpoint_url=self._endpoint_url,
-            storage_options=self._storage_options,
-            caching=None,
-            cache_bucket=None,
+        super().__init__(
+            path=base_path,
+            bucket=bucket,
+            name=None,
+            caching=False,
+            partitioning=partitioning,
+            partitioning_flavor=partitioning_flavor,
+            format=format,
+            compression=compression,
+            ddb=ddb,
+            cache_storage=cache_storage,
+            protocol=protocol,
+            profile=profile,
+            endpoint_url=endpoint_url,
+            storage_options=storage_options,
             fsspec_fs=fsspec_fs,
             pyarrow_fs=pyarrow_fs,
-            use_pyarrow_fs=self._use_pyarrow_fs,
+            use_pyarrow_fs=use_pyarrow_fs,
         )
-        self._fs = self._filesystem["fsspec_main"]
-        if self._use_pyarrow_fs:
-            self._pafs = self._filesystem["pyarrow_main"]
-        else:
-            self._pafs = None
+        self._base_path = self._path.copy()
+        del self._path
 
-        self._partitioning = (
-            [partitioning] if isinstance(partitioning, str) else partitioning
-        )
-        self._partitioning_flavor = partitioning_flavor
-        if self._partitioning_flavor is None and self._partitioning is not None:
+        if isinstance(self._partitioning, str):
+            self._partitioning = [self._partitioning]
+
+        if not self._partitioning_flavor and self._partitioning:  # is not None:
             self._partitioning_flavor = "hive"
 
-        self._format = format
-        self._compression = compression
+        self._mode = mode
         self._base_name = base_name
-
-        _ = self.sort(by=sort_by, ascending=ascending)
-        _ = self.distinct(value=distinct)
-        _ = self.drop(columns=drop)
-
-        if ddb is not None:
-            self.ddb = ddb
-        else:
-            self.ddb = duckdb.connect()
-        self.ddb.execute(f"SET temp_directory='{cache_storage}'")
-
-    def sort(self, by: str | list | None, ascending: bool | list | None = None):
-        self._sort_by = by
-
-        if ascending is None:
-            ascending = True
-        self._ascending = ascending
-
-        if self._sort_by is not None:
-            self._sort_by_ddb = get_ddb_sort_str(sort_by=by, ascending=ascending)
-
-        return self
-
-    def distinct(self, value: bool | None):
-        if value is None:
-            value = False
-        self._distinct = value
-
-        return self
-
-    def drop(self, columns: str | list | None):
-        self._drop = columns
-
-        return self
 
     def partitioning(
         self, columns: str | list | None = None, flavor: str | None = None
     ):
-        if columns is not None:
+        if columns:  # is not None:
             if isinstance(columns, str):
                 columns = [columns]
             self._partitioning = columns
 
-        if flavor is not None:
+        if flavor:  # is not None:
             self._partitioning_flavor = flavor
 
         return self
@@ -135,16 +90,16 @@ class Writer:
         return self
 
     def format(self, value: str | None = None):
-        if value is not None:
+        if value:  # is not None:
             self._format = value
 
         return self
 
     def mode(self, value: str | None):
-        if value is not None:
-            if value not in ["overwrite", "append", "raise"]:
+        if value:  # is not None:
+            if value not in ["overwrite", "delta", "append", "raise"]:
                 raise ValueError(
-                    "Value for mode must be 'overwrite', 'raise' or 'append'."
+                    "Value for mode must be 'overwrite', 'delta', 'raise' or 'append'."
                 )
             else:
                 self._mode = value
@@ -155,7 +110,7 @@ class Writer:
         if os.path.splitext(self._base_path)[-1] != "":
             return self._base_path
 
-        if partition_names is not None:
+        if partition_names:  # is not None:
             if self._partitioning_flavor == "hive":
                 hive_partitions = [
                     "=".join(part) for part in zip(self._partitioning, partition_names)
@@ -191,8 +146,20 @@ class Writer:
 
         return zip(filters, all_partitions)
 
-    def _handle_write_mode(self, table: duckdb.DuckDBPyRelation, path: str):
+    def _handle_write_mode(
+        self,
+        table: duckdb.DuckDBPyRelation,
+        path: str,
+        delta_subset: list | None = None,
+        datetime_column: str | None = None,
+        start_time: str | dt.datetime | None = None,
+    ):
         self._fs.invalidate_cache()
+
+        if datetime_column:  # is not None:
+            if not start_time:
+                start_time = table.max(datetime_column).fetchone()[0]
+
         if self._fs.exists(path):
 
             if self._mode == "raise":
@@ -207,36 +174,38 @@ class Writer:
                 return table
 
             elif self._mode == "append":
-                
-                if self._distinct:
-
-                    existing_table = Reader(
-                        path=path,
-                        format=self._format,
-                        #sort_by=self._sort_by,
-                        #ascending=self._ascending,
-                        #distinct=self._distinct,
-                        #drop=self._drop,
-                        ddb=self.ddb,
-                        fsspec_fs=self._fs,
-                        pyarrow_fs=self._pafs,
-                        use_pyarrow_fs=self._use_pyarrow_fs,
-                    )
-                    
-                    if existing_table.disk_usage / 1024**2 <= 100:
-                        return get_tables_diff(
-                            table1=table,
-                            table2=existing_table.mem_table,
-                            ddb=self.ddb,
-                        )
-
-                    return get_tables_diff(
-                        table1=table,
-                        table2=existing_table.dataset,
-                        ddb=self.ddb,
-                    )
-
                 return table
+
+            elif self._mode == "delta":
+
+                existing_table = Reader(
+                    path=path,
+                    format=self._format,
+                    ddb=self.ddb,
+                    fsspec_fs=self._fs,
+                    pyarrow_fs=self._pafs,
+                    use_pyarrow_fs=self._use_pyarrow_fs,
+                )
+
+                if existing_table.disk_usage / 1024**2 <= 100:
+                    existing_table.load_pa_table()
+
+                tables_diff = get_tables_diff(
+                    table1=table.filter(f"{datetime_column}>='{start_time}'")
+                    if datetime_column  # is not None
+                    else table,
+                    table2=existing_table.rel.filter(
+                        f"{datetime_column}>='{start_time}'"
+                    )
+                    if datetime_column  # is not None
+                    else existing_table.rel,
+                    subset=delta_subset,
+                    ddb=self.ddb,
+                )
+
+                del existing_table
+
+                return tables_diff
 
             else:
                 raise ValueError(
@@ -250,14 +219,15 @@ class Writer:
         table: duckdb.DuckDBPyRelation,
         batch_size: int | str | None,
         datetime_column: str | None = None,
+        start_time: str | dt.datetime | None = None,
     ):
 
         if isinstance(batch_size, int):
-            for i in range(table.shape[0] // batch_size + 1):
+            for i in progressbar.progressbar(range(table.shape[0] // batch_size + 1)):
                 yield table.limit(batch_size, offset=i * batch_size)
 
         elif isinstance(batch_size, str):
-            if datetime_column is None:
+            if not datetime_column:
                 raise TypeError("datetime_column must be not None")
             if datetime_column not in table.columns:
                 raise ValueError(
@@ -265,16 +235,16 @@ class Writer:
                 )
 
             unit = re.findall("[a-z]+", batch_size.lower())
-            if len(unit)>0:
+            if len(unit) > 0:
                 unit = unit[0]
             else:
-                unit="y"
-                
+                unit = "y"
+
             val = re.findall("[0-9]+", batch_size)
-            if len(val)>0:
+            if len(val) > 0:
                 val = int(val[0])
             else:
-                val=1
+                val = 1
 
             if unit in ["microseconds", "micro", "u"]:
                 interval = f"to_microseconds({val})"
@@ -300,24 +270,26 @@ class Writer:
             elif unit in ["years", "y", "a"]:
                 interval = f"to_years({val})"
 
+            if not start_time:  # is not None:
+                start_time = table.min(datetime_column).fetchone()[0]
 
-            start_time = table.min(datetime_column).fetchone()[0]
             end_time = table.max(datetime_column).fetchone()[0]
 
-            i = 0
-            end = False
-            while not end:
-                filter = (
-                    f"{datetime_column} >= TIMESTAMP '{start_time}' + {i}*{interval} "
-                    f"AND {datetime_column} < TIMESTAMP '{start_time}' + {i+1}*{interval}"
+            print(start_time, end_time, interval)
+            timestamps = (
+                self.ddb.query(
+                    f"SELECT * FROM generate_series(TIMESTAMP '{start_time}', TIMESTAMP '{end_time}' + {interval}, {interval})"
                 )
+                .arrow()["generate_series"]
+                .to_pylist()
+            )
+
+            for sd, ed in progressbar.progressbar(
+                list(zip(timestamps[:-1], timestamps[1:]))
+            ):
+                filter = f"{datetime_column} >= TIMESTAMP '{sd}' AND {datetime_column} < TIMESTAMP '{ed}'"
 
                 table_part = table.filter(filter)
-                i += 1
-                if table_part.max(datetime_column).fetchone()[0] == end_time:
-                    end = True
-                elif i==1000:
-                    end=True
 
                 yield table_part
 
@@ -375,29 +347,26 @@ class Writer:
         batch_size: int | str | None = None,
         row_group_size: int | None = None,
         datetime_column: str | None = None,
+        start_time: str | dt.datetime | None = None,
+        delta_subset: list | None = None,
+        transform_func: object | None = None,
+        transform_func_kwargs: dict | None = None,
         **kwargs,
     ):
 
-        table = sort_table(table, sort_by=self._sort_by, ascending=self._ascending, ddb=self.ddb)
-        table = drop_columns(table, columns=self._drop)
-        if self._distinct:
-            table = distinct_table(table, ddb=self.ddb)
-            
+        table = self._drop_sort_distinct(table=table)
+
         self._table = to_relation(
             table=table,
             ddb=self.ddb,
-            #sort_by=self._sort_by,
-            #ascending=self._ascending,
-            #distinct=self._distinct,
-            #drop=self._drop,
         )
 
-        if batch_size is None:
+        if not batch_size:
             batch_size = min(
                 self._table.shape[0], 1024**2 * 64 // self._table.shape[1]
             )
 
-        if self._partitioning is not None:
+        if self._partitioning:  # is not None:
             filters = self._get_partition_filters()
 
             for partition_filter, partition_names in filters:
@@ -410,7 +379,11 @@ class Writer:
                 )
 
                 table_part = self._handle_write_mode(
-                    table=table_part, path=partition_base_path
+                    table=table_part,
+                    path=partition_base_path,
+                    delta_subset=delta_subset,
+                    datetime_column=datetime_column,
+                    start_time=start_time,
                 )
 
                 # Write table for partition
@@ -421,7 +394,14 @@ class Writer:
                         table=table_part,
                         batch_size=batch_size,
                         datetime_column=datetime_column,
+                        start_time=start_time,
                     ):
+                        if transform_func:  # is not None:
+                            table_ = to_relation(
+                                transform_func(table_, **transform_func_kwargs),
+                                ddb=self.ddb,
+                            )
+
                         self.write_table(
                             table=table_.arrow(),
                             path=self._gen_path(partition_names=partition_names),
@@ -432,7 +412,13 @@ class Writer:
         else:
             # check if base_path for partition is empty and act depending on mode and distinct.
             base_path = os.path.dirname(self._gen_path(partition_names=None))
-            self._table = self._handle_write_mode(table=self._table, path=base_path)
+            self._table = self._handle_write_mode(
+                table=self._table,
+                path=base_path,
+                delta_subset=delta_subset,
+                datetime_column=datetime_column,
+                start_time=start_time,
+            )
 
             # write table
 
@@ -441,10 +427,83 @@ class Writer:
                     table=self._table,
                     batch_size=batch_size,
                     datetime_column=datetime_column,
+                    start_time=start_time,
                 ):
+                    if transform_func:  # is not None:
+                        table_ = to_relation(
+                            transform_func(table_, **transform_func_kwargs),
+                            ddb=self.ddb,
+                        )
+
                     self.write_table(
                         table=table_.arrow(),
                         path=self._gen_path(partition_names=None),
                         row_group_size=row_group_size,
                         **kwargs,
                     )
+
+
+class TimeFlyWriter(Writer):
+    def __init__(
+        self,
+        base_path: str,
+        timefly: str | dt.datetime | None = None,
+        bucket: str | None = None,
+        partitioning: list | str | None = None,
+        partitioning_flavor: str | None = None,
+        format: str = "parquet",
+        compression: str = "zstd",
+        mode: str | None = "delta",  # can be 'delta', 'append', 'overwrite', 'raise'
+        ddb: duckdb.DuckDBPyConnection | None = None,
+        cache_storage: str | None = "/tmp/pydala/",
+        protocol: str | None = None,
+        profile: str | None = None,
+        endpoint_url: str | None = None,
+        storage_options: dict = {},
+        base_name: str = "data",
+        fsspec_fs: spec.AbstractFileSystem | None = None,
+        pyarrow_fs: FileSystem | None = None,
+        use_pyarrow_fs: bool = False,
+    ):
+        self._base_path_parent = base_path
+        self.timefly = TimeFly(
+            path=base_path,
+            bucket=bucket,
+            fsspec_fs=fsspec_fs,
+            protocol=protocol,
+            profile=profile,
+            endpoint_url=endpoint_url,
+            storage_options=storage_options,
+        )
+        if timefly is not None:
+            self._timefly = (
+                timefly
+                if isinstance(timefly, dt.datetime)
+                else dt.datetime.fromisoformat(timefly)
+            )
+        else:
+            self._timefly = None
+
+        self._snapshot_path = self.timefly._find_snapshot_subpath(timefly=self._timefly)
+        self._base_path = os.path.join(self._base_path_parent, self._snapshot_path)
+
+        super().__init__(
+            base_path=self._base_path,
+            bucket=bucket,
+            partitioning=partitioning,
+            partitioning_flavor=partitioning_flavor,
+            format=format,
+            compression=compression,
+            mode=mode,
+            ddb=ddb,
+            cache_storage=cache_storage,
+            protocol=protocol,
+            base_name=base_name,
+            fsspec_fs=fsspec_fs,
+            pyarrow_fs=pyarrow_fs,
+            use_pyarrow_fs=use_pyarrow_fs,
+        )
+
+    def set_snapshot(self, snapshot):
+        self._snapshot_path = self.timefly._find_snapshot_subpath(snapshot)
+        self._base_path = os.path.join(self._base_path_parent, self._snapshot_path)

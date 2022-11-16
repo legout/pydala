@@ -8,7 +8,8 @@ import rtoml
 from fsspec import spec
 from pyarrow.fs import FileSystem
 
-from .helper import NestedDictReplacer, get_filesystem, get_storage_path_options
+from ..utils.base import NestedDictReplacer
+from ..utils.filesystem import get_filesystem, get_storage_path_options
 from .reader import Reader
 from .writer import Writer
 
@@ -335,10 +336,6 @@ class TimeFlyReader(Reader):
         name: str | None = None,
         partitioning: ds.Partitioning | list | str | None = None,
         format: str | None = "parquet",
-        sort_by: str | list | None = None,
-        ascending: bool | list | None = None,
-        distinct: bool | None = None,
-        drop: str | list | None = "__index_level_0__",
         ddb: duckdb.DuckDBPyConnection | None = None,
         caching: bool = False,
         cache_storage: str | None = "/tmp/pydala/",
@@ -377,10 +374,6 @@ class TimeFlyReader(Reader):
             name=name,
             partitioning=partitioning,
             format=format,
-            sort_by=sort_by,
-            ascending=ascending,
-            distinct=distinct,
-            drop=drop,
             ddb=ddb,
             caching=caching,
             cache_storage=cache_storage,
@@ -398,10 +391,10 @@ class TimeFlyReader(Reader):
         self._path = os.path.join(self._base_path, self._snapshot_path)
         if self.has_dataset:
             del self._dataset
-            self.set_dataset()
-        if self.has_mem_table:
-            del self._mem_table
-            self.load_mem_table()
+            self.load_dataset()
+        if self.has_pa_table:
+            del self._pa_table
+            self.load_pa_table()
         if self.has_pd_dataframe:
             del self._pd_dataframe
             self.to_pandas()
@@ -428,11 +421,7 @@ class TimeFlyWriter(Writer):
         partitioning_flavor: str | None = None,
         format: str = "parquet",
         compression: str = "zstd",
-        mode: str | None = "append",  # can be 'append', 'overwrite', 'raise'
-        sort_by: str | list | None = None,
-        ascending: bool | list | None = None,
-        distinct: bool | None = None,
-        drop: str | list | None = "__index_level_0__",
+        mode: str | None = "delta",  # can be 'delta', 'append', 'overwrite', 'raise'
         ddb: duckdb.DuckDBPyConnection | None = None,
         cache_storage: str | None = "/tmp/pydala/",
         protocol: str | None = None,
