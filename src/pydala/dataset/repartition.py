@@ -70,18 +70,22 @@ class Repartition:
             self._reader._fs.rm(self._reader._path, recursive=True)
 
     def sort(self, by: str | list | None, ascending: bool | list | None = None):
-        self._writer.sort(by=by,ascending=ascending)
+        self._writer.sort(by=by, ascending=ascending)
 
         return self
 
-    def distinct(self, value: bool | None,
+    def distinct(
+        self,
+        value: bool | None,
         subset: list | None = None,
         presort_by: list | None = None,
-        postsort_by: list | None = None,):
-        self._writer.distinct(value=value, subset=subset,presort_by=presort_by, postsort_by=postsort_by)
+        postsort_by: list | None = None,
+    ):
+        self._writer.distinct(
+            value=value, subset=subset, presort_by=presort_by, postsort_by=postsort_by
+        )
 
         return self
-
 
     def drop(self, columns: str | list | None):
         self._writer.drop(columns=columns)
@@ -96,7 +100,7 @@ class Repartition:
         return self
 
     def compression(self, value: str | None = None):
-       self._writer.compression(value=value)
+        self._writer.compression(value=value)
 
         return self
 

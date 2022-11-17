@@ -30,6 +30,7 @@ class Writer(BaseDataSet):
         compression: str = "zstd",
         mode: str | None = "delta",  # can be 'delta', 'append', 'overwrite', 'raise'
         ddb: duckdb.DuckDBPyConnection | None = None,
+        ddb_memory_limit: str = "-1",
         cache_storage: str | None = "/tmp/pydala/",
         protocol: str | None = None,
         profile: str | None = None,
@@ -50,6 +51,7 @@ class Writer(BaseDataSet):
             format=format,
             compression=compression,
             ddb=ddb,
+            ddb_memory_limit=ddb_memory_limit,
             cache_storage=cache_storage,
             protocol=protocol,
             profile=profile,

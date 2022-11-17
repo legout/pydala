@@ -1,14 +1,17 @@
-from ..filesystem.base import BaseFileSystem
+import os
+
+import duckdb
+import pandas as pd
+import polars as pl
+import pyarrow as pa
+import pyarrow.dataset as ds
 from fsspec import spec
 from pyarrow.fs import FileSystem
-import duckdb
-import pyarrow as pa
+
+from ..filesystem.base import BaseFileSystem
 from ..utils.base import get_ddb_sort_str
-import polars as pl
-import pandas as pd
-import pyarrow.dataset as ds
-from ..utils.table import drop_columns, distinct_table, sort_table
-import os
+from ..utils.table import distinct_table, drop_columns, sort_table
+
 
 class BaseDataSet(BaseFileSystem):
     def __init__(
@@ -17,10 +20,11 @@ class BaseDataSet(BaseFileSystem):
         bucket: str | None = None,
         name: str | None = None,
         partitioning: ds.Partitioning | list | str | None = None,
-        partitioning_flavor:str|None = None,
+        partitioning_flavor: str | None = None,
         format: str | None = "parquet",
-        compression:str|None="zstd",
-        ddb:duckdb.DuckDBPyRelation|None=None,
+        compression: str | None = "zstd",
+        ddb: duckdb.DuckDBPyRelation | None = None,
+        ddb_memory_limit: str = "-1",
         caching: bool = False,
         cache_storage: str | None = "/tmp/pydala/",
         protocol: str | None = None,
@@ -30,7 +34,7 @@ class BaseDataSet(BaseFileSystem):
         fsspec_fs: spec.AbstractFileSystem | None = None,
         pyarrow_fs: FileSystem | None = None,
         use_pyarrow_fs: bool = False,
-        ):
+    ):
 
         super().__init__(
             path=path,
@@ -63,6 +67,8 @@ class BaseDataSet(BaseFileSystem):
         self.ddb.execute(
             f"SET temp_directory='{os.path.join(cache_storage, 'duckdb')}'"
         )
+        self._ddb_memory_limit = ddb_memory_limit
+        self.ddb.execute(f"SET memory_limit='{self._ddb_memory_limit}'")
 
     def sort(self, by: str | list | None, ascending: bool | list | None = None):
         self._sort_by = by
@@ -102,7 +108,7 @@ class BaseDataSet(BaseFileSystem):
     def _drop_sort_distinct(
         self,
         table: duckdb.DuckDBPyRelation
-        | pa.table
+        | pa.Table
         | pl.DataFrame
         | pd.DataFrame
         | ds.FileSystemDataset,

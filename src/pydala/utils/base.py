@@ -1,5 +1,37 @@
+import logging
 import random
 import string
+import sys
+from logging import handlers
+from fsspec import spec
+from pyarrow.fs import FileSystem
+import rtoml
+
+
+def get_logger(name: str, log_file: str):
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.INFO)
+
+    formatter = logging.Formatter(
+        "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
+    )
+
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setLevel(logging.INFO)
+    stdout_handler.setFormatter(formatter)
+
+    # ath(log_file).mkdir(parents=True, exist_ok=True)
+    # file_handler = logging.FileHandler(log_file)
+    file_handler = handlers.TimedRotatingFileHandler(
+        log_file, when="D", interval=1, backupCount=2
+    )
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(formatter)
+
+    logger.addHandler(stdout_handler)
+    logger.addHandler(file_handler)
+
+    return logger
 
 
 def get_ddb_sort_str(sort_by: str | list, ascending: bool | list | None = None) -> str:
@@ -41,7 +73,6 @@ def convert_size_unit(size, unit="MB"):
         return round(size / 1024**5, 1)
 
 
-
 class NestedDictReplacer:
     def __init__(self, d: dict) -> None:
         self._d = d
@@ -73,3 +104,23 @@ class NestedDictReplacer:
     def replace(self, old: str | None, new: str | None) -> dict:
         d = self._d
         return self._dict_replace_value(d, old, new)
+
+
+def read_toml(path: str, filesystem: FileSystem | spec.AbstractFileSystem) -> dict:
+    if filesystem.exists(path):
+        with filesystem.open(path, "r") as f:
+            return NestedDictReplacer(rtoml.load(f)).replace("None", None)
+    raise OSError(f"path {path} not exists.")
+
+def write_toml(
+    config: dict,
+    path: str,
+    filesystem: FileSystem | spec.AbstractFileSystem,
+    pretty: bool = False,
+) -> None:
+    with filesystem.open(path, "w") as f:
+        rtoml.dump(
+            NestedDictReplacer(config).replace(None, "None"),
+            f,
+            pretty=pretty,
+        )

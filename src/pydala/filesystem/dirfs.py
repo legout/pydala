@@ -7,7 +7,7 @@ from fsspec.implementations.dirfs import DirFileSystem
 from fsspec.spec import AbstractFileSystem
 from fsspec.utils import infer_storage_options
 
-from .base import fsspec_filesystem, pyarrow_filesystem
+from .fs import fsspec_filesystem, pyarrow_filesystem
 
 
 class DirFileSystem(DirFileSystem):
