@@ -7,7 +7,7 @@ from pyarrow.fs import FileSystem
 
 from .dirfs import fsspec_dir_filesystem, pyarrow_subtree_filesystem
 from .fs import fsspec_filesystem, pyarrow_filesystem
-
+from ..utils.logging import get_logger, log_decorator
 
 class BaseFileSystem:
     def __init__(
@@ -24,7 +24,16 @@ class BaseFileSystem:
         fsspec_fs: spec.AbstractFileSystem | None = None,
         pyarrow_fs: FileSystem | None = None,
         use_pyarrow_fs: bool = False,
+        log_file:str|None=None,
+        log_sub_dir:str|None=None
     ):
+
+        self._log_file = log_file
+        self._log_sub_dir = log_sub_dir
+        self.logger = get_logger(
+            name=repr(self.__class__).split("'")[1], log_file=log_file, log_sub_dir=log_sub_dir
+        )
+        
         self._name = name
         self._tables = dict()
         self._cached = False
@@ -56,7 +65,6 @@ class BaseFileSystem:
         self._set_filesystem()
 
     
-
     def _get_storage_path_options(self,
         bucket: str | None, path: str | None, protocol: str | None
     ):
@@ -71,6 +79,7 @@ class BaseFileSystem:
 
         return bucket, path, protocol
 
+    @log_decorator()
     def _set_paths(
         self,
         path: str,
@@ -95,7 +104,7 @@ class BaseFileSystem:
                 self._cache_bucket = mkdtemp()
         else:
             self._cache_bucket = None
-            
+       
     def _get_filesystems(
         self,
         bucket: str | None,

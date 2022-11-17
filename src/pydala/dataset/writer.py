@@ -13,6 +13,7 @@ from fsspec import spec
 from pyarrow.fs import FileSystem
 
 from ..utils.base import random_id
+from ..utils.logging import log_decorator
 from ..utils.table import get_tables_diff, to_relation
 from .base import BaseDataSet
 from .reader import Reader
@@ -70,7 +71,10 @@ class Writer(BaseDataSet):
         if not self._partitioning_flavor and self._partitioning:  # is not None:
             self._partitioning_flavor = "hive"
 
-        self._mode = mode
+        self.compression()
+        self.partitioning()
+        self.mode()
+
         self._base_name = base_name
 
     def partitioning(
@@ -83,18 +87,23 @@ class Writer(BaseDataSet):
 
         if flavor:  # is not None:
             self._partitioning_flavor = flavor
-
+            
+        self.logger.info(f"{self._partitioning} - {self._partitioning_flavor}")
+        
         return self
 
     def compression(self, value: str | None = None):
         self._compression = value
+        self.logger.info(self._compression)
 
         return self
 
     def format(self, value: str | None = None):
         if value:  # is not None:
             self._format = value
-
+            
+        self.logger.info(self._format)
+        
         return self
 
     def mode(self, value: str | None):
@@ -105,6 +114,8 @@ class Writer(BaseDataSet):
                 )
             else:
                 self._mode = value
+
+        self.logger.info(self._mode)
 
         return self
 
@@ -298,6 +309,7 @@ class Writer(BaseDataSet):
         else:
             yield table
 
+    @log_decorator(show_arguments=False)
     def write_table(
         self,
         table: pa.Table,
@@ -307,7 +319,6 @@ class Writer(BaseDataSet):
     ):
         if table.shape[0] > 0:
             format = self._format.replace("ipc", "feather").replace("arrow", "feather")
-
             if format == "feather":
                 if self._use_pyarrow_fs:
                     with self._pafs.open_output_stream(path) as f:
@@ -338,6 +349,7 @@ class Writer(BaseDataSet):
                     **kwargs,
                 )
 
+    @log_decorator(show_arguments=False)
     def write_dataset(
         self,
         table: duckdb.DuckDBPyRelation

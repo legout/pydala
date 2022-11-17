@@ -16,7 +16,7 @@ from ..utils.dataset import schema_auto_conversion
 from ..utils.table import to_pandas, to_polars, to_relation
 from .base import BaseDataSet
 from .timefly import TimeFly
-
+from ..utils.logging import log_decorator
 
 class Reader(BaseDataSet):
     def __init__(
@@ -223,6 +223,7 @@ class Reader(BaseDataSet):
         else:
             raise FileNotFoundError(f"{self._path} not found.")
 
+    @log_decorator()
     def load_dataset(
         self, name: str = "dataset", schema: pa.Schema | None = None, **kwargs
     ):
@@ -243,6 +244,7 @@ class Reader(BaseDataSet):
         self._tables["dataset"] = name
         self.ddb.register(name, self._dataset)
 
+    @log_decorator()
     def load_pa_table(
         self,
         name: str = "pa_table",
@@ -273,6 +275,7 @@ class Reader(BaseDataSet):
 
         return self._pa_table
 
+    @log_decorator()
     def create_temp_table(
         self,
         name: str = "temp_table",
@@ -312,6 +315,7 @@ class Reader(BaseDataSet):
         self._tables["temp_table"] = name
         self.ddb.execute(sql)
 
+    @log_decorator()
     def to_relation(
         self,
         create_temp_table: bool = False,
@@ -343,6 +347,7 @@ class Reader(BaseDataSet):
 
         return self._rel
 
+    @log_decorator()
     def to_polars(
         self,
     ):
@@ -368,6 +373,7 @@ class Reader(BaseDataSet):
 
         return self._pl_dataframe
 
+    @log_decorator()
     def to_pandas(
         self,
     ):
@@ -393,9 +399,11 @@ class Reader(BaseDataSet):
 
         return self._pd_dataframe
 
+    @log_decorator()
     def execute(self, *args, **kwargs):
         return self.ddb.execute(*args, **kwargs)
 
+    @log_decorator()
     def query(self, *args, **kwargs):
         return self.ddb.query(*args, **kwargs)
 

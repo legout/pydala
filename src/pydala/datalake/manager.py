@@ -10,6 +10,7 @@ from .dataset.timefly import TimeFly
 from .dataset.writer import TimeFlyWriter
 from .filesystem.base import BaseFileSystem
 from .utils.base import read_toml, write_toml
+from .utils.logging import log_decorator
 
 
 class Manager(BaseFileSystem):
@@ -29,6 +30,8 @@ class Manager(BaseFileSystem):
         fsspec_fs: spec.AbstractFileSystem | None = None,
         pyarrow_fs: FileSystem | None = None,
         use_pyarrow_fs: bool = False,
+        log_file: str | None = None,
+        log_sub_dir: str | None = None,
     ):
         super().__init__(
             path=path,
@@ -43,9 +46,12 @@ class Manager(BaseFileSystem):
             fsspec_fs=fsspec_fs,
             pyarrow_fs=pyarrow_fs,
             use_pyarrow_fs=use_pyarrow_fs,
+            log_file=log_file,
+            log_sub_dir=log_sub_dir,
         )
         self._config_path = os.path.join(path, "_pydala.toml")
-        self.read_config()
+        self.datasets = {}
+
         if ddb:  # is not None:
             self.ddb = ddb
         else:
@@ -56,20 +62,23 @@ class Manager(BaseFileSystem):
         self._ddb_memory_limit = ddb_memory_limit
         self.ddb.execute(f"SET memory_limit='{self._ddb_memory_limit}'")
 
+        self.read_config()
+
     def read_config(self) -> None:
         if self._fs.exists(self._config_path):
-            self._config = read_toml(path=self._config_path, filesystem=self._fs)
+            self.config = read_toml(path=self._config_path, filesystem=self._fs)
         else:
             self.new()
 
     def write_config(self, pretty: bool = False) -> None:
         write_toml(
-            config=self._config,
+            config=self.config,
             path=self._config_path,
             filesystem=self._fs,
             pretty=pretty,
         )
 
+    @log_decorator()
     def new(
         self, name: str | None = None, description: str | None = None, save: bool = True
     ) -> None:
@@ -93,81 +102,114 @@ class Manager(BaseFileSystem):
         if save:
             self.write_config()
 
-    def init(
+    @log_decorator()
+    def load(self, paths: list | None = None):
+        if not paths:
+            paths: list = [
+                os.path.dirname(path)
+                for path in self._fs.glob(os.path.join(self._path, "**_dataset.toml"))
+            ]
+
+        for path in paths:
+            tf = TimeFly(path=path, fsspec_fs=self._fs)
+            if "name" in tf.config["dataset"]:
+                name = tf.config["dataset"]["name"]
+            else:
+                name = path.replace("/", ".")
+
+            self.datasets[name] = tf
+
+    @log_decorator()
+    def create(
         self,
         name: str | None = None,
         description: str | None = None,
         paths: list | None = None,
         clean: bool = False,
     ):
-        self.new(name=name, description=description, save=False)
+        if not self.is_initialized:
+            self.new(name=name, description=description, save=False)
+
         if not paths:
-            paths = self._fs.glob(os.path.join(self._path, "**_dataset.toml"))
+            paths: list = [
+                os.path.dirname(path)
+                for path in self._fs.glob(os.path.join(self._path, "**_dataset.toml"))
+            ]
 
         for path in paths:
             self.add_dataset(path, clean=clean)
 
+    @log_decorator()
     def add_dataset(self, path: str, clean: bool = False, **kwargs):
-        if self._fs.exists(path):
-            if self._use_pyarrow_fs:
-                tf = TimeFly(
-                    path=path,
-                    pyarrow_fs=self._fs,
-                    use_pyarrow_fs=self._use_pyarrow_fs,
-                )
-            else:
-                tf = TimeFly(path=path, fsspec_fs=self._fs)
+        name = path.replace("/", ".")
+        # self.datasets[name] = {}
+        if self._use_pyarrow_fs:
+            self.datasets[name] = TimeFly(
+                path=path,
+                pyarrow_fs=self._fs,
+                use_pyarrow_fs=self._use_pyarrow_fs,
+            )
+        else:
+            self.datasets[name] = TimeFly(path=path, fsspec_fs=self._fs)
 
-            if not tf.is_initialized:
+        if self._fs.exists(path):
+
+            if self.datasets[name].datafiles_in_root:
                 if not "name" in kwargs:
-                    kwargs["name"] = "-".join(path.split("/"))
+                    kwargs["name"] = name
                 if not "description" in kwargs:
                     kwargs[
                         "description"
                     ] = f"PyDala {self._name} -> Dataset {kwargs['name']}"
 
-                tf.init(**kwargs)
+                self.datasets[name].create(**kwargs)
 
                 name = kwargs["name"]
                 description = kwargs["description"]
 
             else:
-                name = tf.config["dataset"]["name"]
-                description = tf.config["dataset"]["description"]
-                tf.config["dataset"]["bucket"] = self._bucket
-                tf.config["dataset"]["protocol"] = self._protocol
-                tf.config["dataset"]["profile"] = self._profile
+                name = self.datasets[name].config["dataset"]["name"]
+                description = self.datasets[name].config["dataset"]["description"]
+                self.datasets[name].config["dataset"]["bucket"] = self._bucket
+                self.datasets[name].config["dataset"]["protocol"] = self._protocol
+                self.datasets[name].config["dataset"]["profile"] = self._profile
 
             if clean:
-                for snapshot in tf.available_snapshots:
-                    tf.delete_snapshot(snapshot=snapshot)
+                for snapshot in self.datasets[name].available_snapshots:
+                    self.datasets[name].delete_snapshot(snapshot=snapshot)
 
-            tf.write_config()
+            self.datasets[name].write_config()
 
-            self._tables[name] = path
-
-            self.config["dataset"][name] = {}
-            self.config["dataset"][name]["name"] = name
-            self.config["dataset"][name]["path"] = path
-            self.config["dataset"][name]["description"] = description
+            dataset = {}  # create_nested_dict(name, {}, sep=".")
+            dataset["name"] = name
+            dataset["path"] = path
+            dataset["description"] = description
+            self.config["dataset"][name.replace(".", "-")] = dataset
             self.write_config()
-        else:
-            raise OSError(f"{path} not found.")
 
+    @log_decorator()
     def remove_dataset(self, name: str, clean: bool = False):
+        name_ = name.replace(".", "-")
         if clean:
-            self._fs.rm(self.config["dataset"][name]["path"], recursive=True)
-        self.config["dataset"].pop(name)
+            self._fs.rm(self.datasets[name_].config["dataset"]["path"], recursive=True)
+        self.config["dataset"].pop(name_)
+        self.datasets.pop(name_)
+
         self.write_config()
 
-    def repartition(self, name:str, snapshot:str|None=None, add_snapshot:bool=False):
-        reader = TimeFlyReader(path=self.config["dataset"][name], )
+    @property
+    def tables(self):
+        return [
+            self.config["dataset"][k]["name"] for k in self.config["dataset"].keys()
+        ]
 
-    def add_snapshot(self, name):
-        pass
+    @property
+    def name(self):
+        return self._name
 
-    def load_snapshot(self, name):
-        pass
+    @property
+    def is_initialized(self):
+        return self._fs.exists(self._config_path)
 
     # TODO:
     # Add TimeFly Instance for every dataset

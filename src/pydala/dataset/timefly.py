@@ -9,6 +9,7 @@ from pyarrow.fs import FileSystem
 
 from ..filesystem.base import BaseFileSystem
 from ..utils.base import read_toml, write_toml
+from ..utils.logging import log_decorator
 
 
 class TimeFly(BaseFileSystem):
@@ -23,6 +24,8 @@ class TimeFly(BaseFileSystem):
         fsspec_fs: spec.AbstractFileSystem | None = None,
         pyarrow_fs: FileSystem | None = None,
         use_pyarrow_fs: bool = False,
+        log_file: str | None = None,
+        log_sub_dir: str | None = None,
     ):
 
         super().__init__(
@@ -38,20 +41,22 @@ class TimeFly(BaseFileSystem):
             fsspec_fs=fsspec_fs,
             pyarrow_fs=pyarrow_fs,
             use_pyarrow_fs=use_pyarrow_fs,
+            log_file=log_file,
+            log_sub_dir=log_sub_dir,
         )
 
         self._config_path = os.path.join(path, "_dataset.toml")
         self.read_config()
 
     def read_config(self) -> None:
-        if self._fs.exists(self._config_path):
-            self._config = read_toml(path=self._config_path, filesystem=self._fs)
+        if self.is_initialized:
+            self.config = read_toml(path=self._config_path, filesystem=self._fs)
         else:
             self.new()
 
     def write_config(self, pretty: bool = False) -> None:
         write_toml(
-            config=self._config,
+            config=self.config,
             path=self._config_path,
             filesystem=self._fs,
             pretty=pretty,
@@ -71,7 +76,18 @@ class TimeFly(BaseFileSystem):
         return ts.strftime("%Y%m%d_%H%M%S")
 
     def infer_format(self):
-        return self._fs.glob(os.path.join(self._path, "**"))[-1].split(".")[-1]
+        all_ext = sorted(
+            {
+                os.path.splitext(f)[1]
+                for f in self._fs.glob(os.path.join(self._path, "**"))
+            }
+        )
+        if "" in all_ext:
+            all_ext.remove("")
+        if ".toml" in all_ext:
+            all_ext.remove(".toml")
+        if len(all_ext) > 0:
+            return all_ext[-1][1:]
 
     def infer_partitioning(self) -> str | None:
         last_file = self._fs.glob(os.path.join(self._path, "**"))[-1]
@@ -79,13 +95,16 @@ class TimeFly(BaseFileSystem):
         if not self._fs.isfile(last_file):
             if "=" in last_file:
                 return "hive"
+            elif (last_file.split(self._path)[-1].split("/")) > 1:
+                return "directory"
 
     def infer_columns(self, format: str | None = None) -> list:
-        return ds.dataset(
+        columns = ds.dataset(
             self._fs.glob(os.path.join(self._path, f"**{format}")),
             format=format,
             filesystem=self._fs,
         ).schema.names
+        return columns
 
     def infer_compression(self) -> str | None:
         last_file = self._fs.glob(os.path.join(self._path, "**"))[-1]
@@ -96,12 +115,13 @@ class TimeFly(BaseFileSystem):
         if compression is not None:
             return compression.lower()
 
+    @log_decorator()
     def new(
         self, name: str | None = None, description: str | None = None, save: bool = True
     ) -> None:
 
         if name is None:
-            name = os.path.basename(self._path)
+            name = self._path.replace("/", ".")
 
         self.config = {}
         dataset = {
@@ -111,15 +131,18 @@ class TimeFly(BaseFileSystem):
             "bucket": self._bucket,
             "path": self._path,
             "protocol": self._protocol,
-            "profile":self._profile
+            "profile": self._profile,
         }
 
         self.config["dataset"] = dataset
+        self._fs.mkdir(os.path.join(self._path, "current"))
+        self._fs.mkdir(os.path.join(self._path, "snapshot"))
 
         if save:
             self.write_config()
 
-    def init(
+    @log_decorator()
+    def create(
         self,
         name: str | None = None,
         description: str | None = None,
@@ -132,40 +155,44 @@ class TimeFly(BaseFileSystem):
         columns: list | None = None,
         batch_size: int | str | None = None,
     ) -> None:
-        self.new(name=name, description=description, save=False)
+        if not self.is_initialized:
+            self.new(name=name, description=description, save=False)
 
-        format = format or self.infer_format()
-        columns = columns or self.infer_columns(format=format)
-        partitioning = partitioning or self.infer_partitioning()
+        if self.datafiles_in_root:
+            format = format or self.infer_format()
+            columns = columns or self.infer_columns(format=format)
+            partitioning = partitioning or self.infer_partitioning()
 
-        if compression is None:
-            if format == "parquet":
-                compression = self.infer_compression()
+            if compression is None:
+                if format == "parquet":
+                    compression = self.infer_compression()
 
-        current = {
-            "created": self._now(),
-            "format": format or None,
-            "compression": compression or None,
-            "partitioning": partitioning or None,
-            "sort_by": sort_by or None,
-            "ascending": ascending or True,
-            "distinct": distinct or False,
-            "columns": columns or [],
-            "batch_size": batch_size or None,
-            "comment": "initialized",
-        }
+            current = {
+                "created": self._now(),
+                "format": format or None,
+                "compression": compression or None,
+                "partitioning": partitioning or None,
+                "sort_by": sort_by or None,
+                "ascending": ascending or True,
+                "distinct": distinct or False,
+                "columns": columns or [],
+                "batch_size": batch_size or None,
+                "comment": "initialized",
+            }
 
-        # move files to current
-        self._mv(self._path, os.path.join(self._path, "current"), format=format)
+            # move files to current
+            self._mv(self._path, os.path.join(self._path, "current"), format=format)
 
-        self.config["current"] = current
+            self.config["current"] = current
         self.write_config()
 
+    @log_decorator()
     def update(self, snapshot: str | None = None, **kwargs) -> None:
         snapshot = snapshot or "current"
         self.config[snapshot].update(**kwargs)
         self.write_config()
 
+    @log_decorator()
     def add_snapshot(
         self,
         format: str | None = None,
@@ -184,36 +211,52 @@ class TimeFly(BaseFileSystem):
             self.config["snapshot"]["deleted"] = []
 
         now = self._now()
+        if not self.current_empty:
+            snapshot = {
+                "creaded": now,
+                "format": format or self.config["current"]["format"],
+                "compression": compression or self.config["current"]["compression"],
+                "partitioning": partitioning or self.config["current"]["partitioning"],
+                "sort_by": sort_by or self.config["current"]["sort_by"],
+                "ascending": ascending or self.config["current"]["ascending"],
+                "distinct": distinct or self.config["current"]["distinct"],
+                "columns": columns or self.config["current"]["columns"],
+                "batch_size": batch_size or self.config["current"]["batch_size"],
+                "comment": comment or "",
+            }
 
-        snapshot = {
-            "creaded": now,
-            "format": format or self.config["current"]["format"],
-            "compression": compression or self.config["current"]["compression"],
-            "partitioning": partitioning or self.config["current"]["partitioning"],
-            "sort_by": sort_by or self.config["current"]["sort_by"],
-            "ascending": ascending or self.config["current"]["ascending"],
-            "distinct": distinct or self.config["current"]["distinct"],
-            "columns": columns or self.config["current"]["columns"],
-            "batch_size": batch_size or self.config["current"]["batch_size"],
-            "comment": comment or "",
-        }
+            self.config["snapshot"][self._timestamp_to_snapshot(now)] = snapshot
+            self.config["snapshot"]["available"].append(
+                self._timestamp_to_snapshot(now)
+            )
 
-        self.config["snapshot"][self._timestamp_to_snapshot(now)] = snapshot
-        self.config["snapshot"]["available"].append(self._timestamp_to_snapshot(now))
+            self._cp(
+                os.path.join(self._path, "current"),
+                os.path.join(self._path, "snapshot", self._timestamp_to_snapshot(now)),
+                format=format or self.config["current"]["format"],
+            )
+            self.write_config()
 
-        self._cp(
-            os.path.join(self._path, "current"),
-            os.path.join(self._path, "snapshot", self._timestamp_to_snapshot(now)),
-            format=format or self.config["current"]["format"],
-        )
-        self.write_config()
+        else:
+            raise FileNotFoundError(
+                f"Can not add snapshot '{snapshot}'. No files found in {os.path.join(self._path, 'current')}."
+            )
 
+    @log_decorator()
     def delete_snapshot(self, snapshot: str) -> None:
+
         path = os.path.join(self._path, "snapshot", snapshot)
-        self._rm(path=path)
-        self.config["snapshot"].pop(snapshot)
-        self.config["snapshot"]["available"].remove(snapshot)
-        self.config["snapshot"]["deleted"].append(snapshot)
+        if self._fs.exists(path):
+            self._rm(path=path)
+            self.config["snapshot"].pop(snapshot)
+            self.config["snapshot"]["available"].remove(snapshot)
+            self.config["snapshot"]["deleted"].append(snapshot)
+            self.write_config()
+
+        else:
+            raise FileNotFoundError(
+                f"Can not delete snapshot '{snapshot}'. {os.path.join(self._path, 'snapshot', snapshot)} not found."
+            )
 
     @property
     def available_snapshots(self):
@@ -243,28 +286,38 @@ class TimeFly(BaseFileSystem):
 
         return snapshot_subpath
 
-    def load_snapshot(self, snapshot: str | dt.datetime):
-        snapshot = self._find_snapshot_subpath(snapshot)
+    @log_decorator()
+    def load_snapshot(self, snapshot: str | dt.datetime, match: str = "exact"):
+        if match != "exact":
+            snapshot = self._find_snapshot_subpath(snapshot)
 
-        current = {
-            "created": self.config["snapshot"][snapshot]["created"],
-            "format": self.config["snapshot"][snapshot]["format"],
-            "compression": self.config["snapshot"][snapshot]["compression"],
-            "partitioning": self.config["snapshot"][snapshot]["partitioning"],
-            "sort_by": self.config["snapshot"][snapshot]["sort_by"],
-            "ascending": self.config["snapshot"][snapshot]["ascending"],
-            "distinct": self.config["snapshot"][snapshot]["distinct"],
-            "columns": self.config["snapshot"][snapshot]["columns"],
-            "batch_size": self.config["snapshot"][snapshot]["batch_size"],
-            "comment": f"Restored from snapshot {snapshot}",
-        }
-        self.config["current"] = current
-        self._cp(
-            os.path.join(self._path, "snapshot", snapshot),
-            os.path.join(self._path, "current"),
-            format=format or self.config["snapshot"][snapshot]["format"],
-        )
-        self.write_config()
+        snapshot_path = os.path.join(self._path, "snapshot", snapshot)
+        current_path = os.path.join(self._path, "current")
+
+        if self._fs.exists(snapshot_path):
+            current = {
+                "created": self.config["snapshot"][snapshot]["created"],
+                "format": self.config["snapshot"][snapshot]["format"],
+                "compression": self.config["snapshot"][snapshot]["compression"],
+                "partitioning": self.config["snapshot"][snapshot]["partitioning"],
+                "sort_by": self.config["snapshot"][snapshot]["sort_by"],
+                "ascending": self.config["snapshot"][snapshot]["ascending"],
+                "distinct": self.config["snapshot"][snapshot]["distinct"],
+                "columns": self.config["snapshot"][snapshot]["columns"],
+                "batch_size": self.config["snapshot"][snapshot]["batch_size"],
+                "comment": f"Restored from snapshot {snapshot}",
+            }
+            self.config["current"] = current
+            self._cp(
+                snapshot_path,
+                current_path,
+                format=format or self.config["snapshot"][snapshot]["format"],
+            )
+            self.write_config()
+        else:
+            raise FileNotFoundError(
+                f"Can not load snapshot '{snapshot}'. {os.path.join(self._path, 'snapshot', snapshot)} not found."
+            )
 
     def _mv(self, path1: str, path2: str, format: str) -> None:
         if (
@@ -325,3 +378,46 @@ class TimeFly(BaseFileSystem):
     @property
     def is_initialized(self):
         return self._fs.exists(self._config_path)
+
+    @property
+    def has_snapshot(self):
+        return self._fs.exists(os.path.join(self._path, "snapshot"))
+
+    @property
+    def has_current(self):
+        return self._fs.exists(os.path.join(self._path, "current"))
+
+    @property
+    def current_empty(self):
+        return (
+            len(self._fs.glob(os.path.join(self._path, f"current/*.{self._format}")))
+            == 0
+        )
+
+    @property
+    def snapshot_empty(self):
+        return (
+            len(self._fs.glob(os.path.join(self._path, f"snapshot/**.{self._format}")))
+            == 0
+        )
+
+    @property
+    def datafiles_in_root(self):
+        all_ext = sorted(
+            {
+                os.path.splitext(f)[1]
+                for f in self._fs.glob(os.path.join(self._path, "*"))
+            }
+        )
+        datafile_ext = [
+            ".parquet",
+            ".feather",
+            ".arrow",
+            ".ipc",
+            ".csv",
+            ".txt",
+            ".tsv",
+            ".parq",
+        ]
+
+        return any([ext in datafile_ext for ext in all_ext])

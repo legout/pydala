@@ -1,11 +1,14 @@
 import logging
+import os
 import random
 import string
 import sys
 from logging import handlers
+from typing import Any
+
+import rtoml
 from fsspec import spec
 from pyarrow.fs import FileSystem
-import rtoml
 
 
 def get_logger(name: str, log_file: str):
@@ -18,7 +21,7 @@ def get_logger(name: str, log_file: str):
 
     stdout_handler = logging.StreamHandler(sys.stdout)
     stdout_handler.setLevel(logging.INFO)
-    stdout_handler.setFormatter(formatter)
+    #stdout_handler.setFormatter(formatter)
 
     # ath(log_file).mkdir(parents=True, exist_ok=True)
     # file_handler = logging.FileHandler(log_file)
@@ -112,15 +115,31 @@ def read_toml(path: str, filesystem: FileSystem | spec.AbstractFileSystem) -> di
             return NestedDictReplacer(rtoml.load(f)).replace("None", None)
     raise OSError(f"path {path} not exists.")
 
+
 def write_toml(
     config: dict,
     path: str,
     filesystem: FileSystem | spec.AbstractFileSystem,
     pretty: bool = False,
 ) -> None:
+    
+    if not filesystem.exists(path):
+        filesystem.mkdirs(path=os.path.dirname(path), exist_ok=True)    
+        
     with filesystem.open(path, "w") as f:
         rtoml.dump(
             NestedDictReplacer(config).replace(None, "None"),
             f,
             pretty=pretty,
         )
+        
+
+
+def create_nested_dict(key: str, val: Any, sep: str = ".") -> dict:
+    if sep not in key:
+        return {key: val}
+    key, new_key = key.split(sep, 1)
+    return {key: create_nested_dict(new_key, val, sep)}
+
+
+# def get_

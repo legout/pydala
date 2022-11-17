@@ -11,6 +11,7 @@ from pyarrow.fs import FileSystem
 from ..filesystem.base import BaseFileSystem
 from ..utils.base import get_ddb_sort_str
 from ..utils.table import distinct_table, drop_columns, sort_table
+from ..utils.logging import log_decorator
 
 
 class BaseDataSet(BaseFileSystem):
@@ -34,6 +35,8 @@ class BaseDataSet(BaseFileSystem):
         fsspec_fs: spec.AbstractFileSystem | None = None,
         pyarrow_fs: FileSystem | None = None,
         use_pyarrow_fs: bool = False,
+        log_file: str | None = None,
+        log_sub_dir: str | None = None,
     ):
 
         super().__init__(
@@ -49,6 +52,8 @@ class BaseDataSet(BaseFileSystem):
             fsspec_fs=fsspec_fs,
             pyarrow_fs=pyarrow_fs,
             use_pyarrow_fs=use_pyarrow_fs,
+            log_file=log_file,
+            log_sub_dir=log_sub_dir,
         )
 
         self._format = format
@@ -70,7 +75,7 @@ class BaseDataSet(BaseFileSystem):
         self._ddb_memory_limit = ddb_memory_limit
         self.ddb.execute(f"SET memory_limit='{self._ddb_memory_limit}'")
 
-    def sort(self, by: str | list | None, ascending: bool | list | None = None):
+    def sort(self, by: str | list | None = None, ascending: bool | list | None = None):
         self._sort_by = by
 
         ascending = ascending or True
@@ -81,11 +86,12 @@ class BaseDataSet(BaseFileSystem):
         if self._sort_by:  # is not None:
             self._sort_by_ddb = get_ddb_sort_str(sort_by=by, ascending=ascending)
 
+        self.logger.info(f"by: {self._sort_by} - ascending: {self._ascending}")
         return self
 
     def distinct(
         self,
-        value: bool | None,
+        value: bool | None = None,
         subset: list | None = None,
         presort_by: list | None = None,
         postsort_by: list | None = None,
@@ -97,14 +103,19 @@ class BaseDataSet(BaseFileSystem):
         self._distinct_params["subset"] = subset
         self._distinct_params["presort_by"] = presort_by
         self._distinct_params["postsort_by"] = postsort_by
-
+        
+        self.logger.info(f"{self._distinct} - params: {repr(self._distinct_params)}")
+        
         return self
 
     def drop(self, columns: str | list | None = "__index_level_0__"):
         self._drop = columns
-
+        
+        self.logger.info(self._drop)
+        
         return self
-
+    
+    @log_decorator(show_arguments=False)
     def _drop_sort_distinct(
         self,
         table: duckdb.DuckDBPyRelation
