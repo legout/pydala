@@ -82,7 +82,7 @@ class TimeFly(BaseFileSystem):
             return self.infer_format()
 
     def set_format(self, format:str|None):
-        if fomat is None:
+        if format is None:
             format = self.get_format()
         self._format = format
 

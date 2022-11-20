@@ -590,10 +590,9 @@ class TimeFlyReader(Reader):
         else:
             self._timefly = None
         self._snapshot_path = self.timefly._find_snapshot_subpath(timefly=self._timefly)
-        self._path = os.path.join(self._base_path, self._snapshot_path)
 
         super().__init__(
-            path=self._path,
+            path=os.path.join(self._base_path, self._snapshot_path),
             bucket=bucket,
             name=name,
             partitioning=partitioning,

@@ -495,7 +495,8 @@ class TimeFlyWriter(Writer):
         pyarrow_fs: FileSystem | None = None,
         use_pyarrow_fs: bool = False,
     ):
-        self._base_path_parent = base_path
+        #self._base_path_parent = base_path
+
         self.timefly = TimeFly(
             path=base_path,
             bucket=bucket,
@@ -515,10 +516,9 @@ class TimeFlyWriter(Writer):
             self._timefly = None
 
         self._snapshot_path = self.timefly._find_snapshot_subpath(timefly=self._timefly)
-        self._base_path = os.path.join(self._base_path_parent, self._snapshot_path)
 
         super().__init__(
-            base_path=self._base_path,
+            base_path=os.path.join(base_path, self._snapshot_path),
             bucket=bucket,
             partitioning=partitioning,
             partitioning_flavor=partitioning_flavor,
