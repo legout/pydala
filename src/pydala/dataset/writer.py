@@ -525,15 +525,18 @@ class TimeFlyWriter(Writer):
             format=format,
             compression=compression,
             mode=mode,
-            ddb=ddb,
+            ddb= ddb,
             cache_storage=cache_storage,
             protocol=protocol,
+            profile=profile,
+            endpoint_url=endpoint_url,
+            storage_options=storage_options,
             base_name=base_name,
             fsspec_fs=fsspec_fs,
             pyarrow_fs=pyarrow_fs,
-            use_pyarrow_fs=use_pyarrow_fs,
-        )
+            use_pyarrow_fs=use_pyarrow_fs
+            )
 
     def set_snapshot(self, snapshot):
         self._snapshot_path = self.timefly._find_snapshot_subpath(snapshot)
-        self._base_path = os.path.join(self._base_path_parent, self._snapshot_path)
+        self._base_path = os.path.join(self.timefly.path, self._snapshot_path)
