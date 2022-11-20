@@ -229,7 +229,7 @@ class TimeFly(BaseFileSystem):
         if not self.current_empty:
             format = self.get_format()
             snapshot = {
-                "creaded": now,
+                "created": now,
                 "format": format,
                 "compression": compression or self.config["current"]["compression"],
                 "partitioning": partitioning or self.config["current"]["partitioning"],

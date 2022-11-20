@@ -159,7 +159,7 @@ class Writer(BaseDataSet):
 
         return zip(filters, all_partitions)
 
-    @log_decorator(show_arguments=False)
+    #@log_decorator(show_arguments=False)
     def _handle_write_mode(
         self,
         table: duckdb.DuckDBPyRelation,
@@ -189,6 +189,7 @@ class Writer(BaseDataSet):
             elif self._mode == "overwrite":
                 if self._fs.exists(path):
                     self._fs.rm(path, recursive=True)
+                    self._mode = "delta"
                 return table
 
             elif self._mode == "append":
@@ -243,14 +244,16 @@ class Writer(BaseDataSet):
     ):
 
         if isinstance(batch_size, int):
-            for i in progressbar.progressbar(range(table.shape[0] // batch_size + 1)):
+            range_max = table.shape[0] // batch_size
+            if range_max != table.shape[0] / batch_size:
+                range_max += 1
+            for i in progressbar.progressbar(range(0, range_max)):
                 table_ = table.limit(batch_size, offset=i * batch_size)
                 table_ = self._handle_write_mode(
                     table=table_,
                     path=base_path,
                     delta_subset=delta_subset,
                     datetime_column=datetime_column,
-                   
                 )
                 yield table_
 
@@ -445,7 +448,6 @@ class Writer(BaseDataSet):
         else:
             # check if base_path for partition is empty and act depending on mode and distinct.
             base_path = os.path.dirname(self._gen_path(partition_names=None))
-           
 
             # write table
 
@@ -495,7 +497,7 @@ class TimeFlyWriter(Writer):
         pyarrow_fs: FileSystem | None = None,
         use_pyarrow_fs: bool = False,
     ):
-        #self._base_path_parent = base_path
+        # self._base_path_parent = base_path
 
         self.timefly = TimeFly(
             path=base_path,
@@ -525,7 +527,7 @@ class TimeFlyWriter(Writer):
             format=format,
             compression=compression,
             mode=mode,
-            ddb= ddb,
+            ddb=ddb,
             cache_storage=cache_storage,
             protocol=protocol,
             profile=profile,
@@ -534,8 +536,8 @@ class TimeFlyWriter(Writer):
             base_name=base_name,
             fsspec_fs=fsspec_fs,
             pyarrow_fs=pyarrow_fs,
-            use_pyarrow_fs=use_pyarrow_fs
-            )
+            use_pyarrow_fs=use_pyarrow_fs,
+        )
 
     def set_snapshot(self, snapshot):
         self._snapshot_path = self.timefly._find_snapshot_subpath(snapshot)

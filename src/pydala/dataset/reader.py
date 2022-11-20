@@ -402,7 +402,7 @@ class Reader(BaseDataSet):
         else:
             if not self.has_dataset:
                 self.load_dataset()
-            self._pl_dataframe = to_pato_polarsndas(
+            self._pl_dataframe = to_polars(
                 self._drop_sort_distinct(table=self.dataset)
             )
 

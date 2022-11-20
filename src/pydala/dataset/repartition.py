@@ -12,6 +12,7 @@ class Repartition:
         caching_method: str = "local",  # or temp_table
         source_table: str = "pa_table",  # or temp_table or dataset
         schema_auto_conversion: bool = True,
+        delete_source:bool=False
     ):
         self._reader = reader
         self._writer = writer
@@ -24,6 +25,7 @@ class Repartition:
         self._schema = None
         self._mode = "delta"
         self._schema_auto_conversion = schema_auto_conversion
+        self._delete_source = delete_source
 
     def read(self):
         if self._schema_auto_conversion:
@@ -32,6 +34,7 @@ class Repartition:
 
         if self._reader._path == self._writer._base_path:
             self._writer._mode = "overwrite"
+            self._delete_source = False
 
             if self._caching_method == "local":
                 self._reader._to_cache()
@@ -66,9 +69,9 @@ class Repartition:
 
         self._source = self._reader.rel
 
-    def _delete_source(self):
-        if self._reader.cached:
-            self._reader._fs.rm(self._reader._path, recursive=True)
+    def _rm(self):
+       if self._reader.cached:
+           self._reader._fs.rm(self._reader._path, recursive=True)
 
     def sort(self, by: str | list | None, ascending: bool | list | None = None):
         self._writer.sort(by=by, ascending=ascending)
@@ -146,7 +149,7 @@ class Repartition:
         format: str | None = None,
         schema: pa.Schema | None = None,
         mode: str | None = None,
-        delete_source: bool = True,
+        delete_source: bool = False,
         datetime_column: str | None = None,
     ):
         self.sort(by=sort_by, ascending=ascending)
@@ -166,4 +169,7 @@ class Repartition:
             datetime_column=datetime_column,
         )
         if delete_source:
-            self._delete_source()
+            self._delete_source = delete_source
+        
+        if self._delete_source:
+            self._rm()
