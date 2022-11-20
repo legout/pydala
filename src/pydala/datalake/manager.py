@@ -5,12 +5,12 @@ import duckdb
 from fsspec import spec
 from pyarrow.fs import FileSystem
 
-from .dataset.reader import TimeFlyReader
-from .dataset.timefly import TimeFly
-from .dataset.writer import TimeFlyWriter
-from .filesystem.base import BaseFileSystem
-from .utils.base import read_toml, write_toml
-from .utils.logging import log_decorator
+from ..dataset.reader import TimeFlyReader
+from ..dataset.timefly import TimeFly
+from ..dataset.writer import TimeFlyWriter
+from ..filesystem.base import BaseFileSystem
+from ..utils.base import read_toml, write_toml
+from ..utils.logging import log_decorator
 
 
 class Manager(BaseFileSystem):
@@ -19,10 +19,6 @@ class Manager(BaseFileSystem):
         path: str,
         bucket: str | None = None,
         name: str | None = None,
-        ddb: duckdb.DuckDBPyConnection | None = None,
-        ddb_memory_limit: str = "-1",
-        caching: bool = False,
-        cache_storage: str | None = "/tmp/pydala/",
         protocol: str | None = None,
         profile: str | None = None,
         endpoint_url: str | None = None,
@@ -37,8 +33,8 @@ class Manager(BaseFileSystem):
             path=path,
             bucket=bucket,
             name=name,
-            caching=caching,
-            cache_storage=cache_storage,
+            caching=False,
+            cache_storage=None,
             protocol=protocol,
             profile=profile,
             endpoint_url=endpoint_url,
@@ -51,16 +47,6 @@ class Manager(BaseFileSystem):
         )
         self._config_path = os.path.join(path, "_pydala.toml")
         self.datasets = {}
-
-        if ddb:  # is not None:
-            self.ddb = ddb
-        else:
-            self.ddb = duckdb.connect()
-        self.ddb.execute(
-            f"SET temp_directory='{os.path.join(cache_storage, 'duckdb')}'"
-        )
-        self._ddb_memory_limit = ddb_memory_limit
-        self.ddb.execute(f"SET memory_limit='{self._ddb_memory_limit}'")
 
         self.read_config()
 
@@ -111,7 +97,11 @@ class Manager(BaseFileSystem):
             ]
 
         for path in paths:
-            tf = TimeFly(path=path, fsspec_fs=self._fs)
+            if self._use_pyarrow_fs:
+                tf = TimeFly(path=path, fsspec_fs=self._fs, pyarrow_fs=self._pafs, use_pyarrow_fs=True)
+            else:
+                tf = TimeFly(path=path, fsspec_fs=self._fs)
+                
             if "name" in tf.config["dataset"]:
                 name = tf.config["dataset"]["name"]
             else:
@@ -143,14 +133,13 @@ class Manager(BaseFileSystem):
     def add_dataset(self, path: str, clean: bool = False, **kwargs):
         name = path.replace("/", ".")
         # self.datasets[name] = {}
-        if self._use_pyarrow_fs:
-            self.datasets[name] = TimeFly(
+        
+        self.datasets[name] = TimeFly(
                 path=path,
-                pyarrow_fs=self._fs,
+                fsspec_fs=self._fs,
+                pyarrow_fs=self._pafs,
                 use_pyarrow_fs=self._use_pyarrow_fs,
             )
-        else:
-            self.datasets[name] = TimeFly(path=path, fsspec_fs=self._fs)
 
         if self._fs.exists(path):
 

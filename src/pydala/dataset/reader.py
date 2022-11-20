@@ -12,11 +12,12 @@ from fsspec import spec
 from pyarrow.fs import FileSystem
 
 from ..utils.base import convert_size_unit
-from ..utils.dataset import schema_auto_conversion
+from ..utils.dataset import get_unified_schema
+from ..utils.logging import log_decorator
 from ..utils.table import to_pandas, to_polars, to_relation
 from .base import BaseDataSet
 from .timefly import TimeFly
-from ..utils.logging import log_decorator
+
 
 class Reader(BaseDataSet):
     def __init__(
@@ -27,7 +28,7 @@ class Reader(BaseDataSet):
         partitioning: ds.Partitioning | list | str | None = None,
         format: str | None = "parquet",
         ddb: duckdb.DuckDBPyConnection | None = None,
-        ddb_memory_limit:str='-1',
+        ddb_memory_limit: str = "-1",
         caching: bool = False,
         cache_storage: str | None = "/tmp/pydala/",
         protocol: str | None = None,
@@ -59,15 +60,14 @@ class Reader(BaseDataSet):
             use_pyarrow_fs=use_pyarrow_fs,
         )
 
-    def _get_pyarrow_schema(self, **kwargs):
+    def get_pyarrow_schema(self, **kwargs):
 
         if self._format == "parquet":
-            dataset = self._get_dataset()
-            all_schemas = [frag.physical_schema for frag in dataset.get_fragments()]
-            return schema_auto_conversion(all_schemas)
+            dataset = self._get_dataset(**kwargs)
+            return get_unified_schema(dataset=dataset)
 
     def set_pyarrow_schema(self):
-        self._schema, self._schemas_equal = self._get_pyarrow_schema()
+        self._schema, self._schemas_equal = self.get_pyarrow_schema()
 
     def _gen_name(self, name: str | None):
         return f"{self._name}_{name}" if self._name else name  # is not None else name
@@ -275,27 +275,33 @@ class Reader(BaseDataSet):
 
         return self._pa_table
 
-    @log_decorator()
-    def create_temp_table(
+    def _create_ddb_table(
         self,
-        name: str = "temp_table",
+        name: str,
+        temp: bool = True,
     ):
         if self._caching and not self.cached:
             self._to_cache()
+        if temp:
 
-        name = self._gen_name(name=name)
+            name = self._gen_name(name=name)
+            sql = f"CREATE OR REPLACE TEMP TABLE {name} AS  SELECT * FROM "
+            self._tables["temp_table"] = name
+        else:
+            name = self._gen_name(name=name)
+            sql = f"CREATE OR REPLACE TABLE {name} AS  SELECT * FROM "
+            self._tables["table_"] = name
 
         if self.has_pa_table:
-
-            sql = f"CREATE OR REPLACE TEMP TABLE {name} AS  SELECT * FROM {self._tables['pa_table']}"
+            sql += f"{self._tables['pa_table']}"
             columns = self.pa_table.column_names
 
         else:
             if not self.has_dataset:
                 self.load_dataset()
 
-            sql = f"CREATE OR REPLACE TEMP TABLE {name} AS  SELECT * FROM {self._tables['dataset']}"
-            columns = self.dataset.schame.names
+            sql += f"{self._tables['dataset']}"
+            columns = self.dataset.schema.names
 
         if self._sort_by:  # is not None:
 
@@ -312,26 +318,44 @@ class Reader(BaseDataSet):
         if self._distinct:
             sql = sql.replace("SELECT *", "SELECT DISTINCT *")
 
-        self._tables["temp_table"] = name
         self.ddb.execute(sql)
+
+    @log_decorator()
+    def create_temp_table(
+        self,
+        name: str = "temp_table",
+    ):
+        self._create_ddb_table(name=name, temp=True)
+
+    @log_decorator()
+    def create_table(self, name: str = "table_"):
+        self._create_ddb_table(name=name, temp=False)
+
+    @log_decorator()
+    def set_existing_ddb_table(self, existing_table:str):
+        self._tables["table_"] = existing_table
+
 
     @log_decorator()
     def to_relation(
         self,
-        create_temp_table: bool = False,
     ):
         if self._caching and not self.cached:
             self._to_cache()
 
-        if create_temp_table:
-            self.create_temp_table()
+        elif self.has_table_:
+            self._rel = self._drop_sort_distinct(
+                table=self.ddb.query(f"SELECT * FROM {self._tables['table_']}")
+            )
 
-        if self.has_temp_table:
-            self._rel = self.ddb.query(f"SELECT * FROM {self._tables['temp_table']}")
+        elif self.has_temp_table:
+            self._rel = self._drop_sort_distinct(
+                table=self.ddb.query(f"SELECT * FROM {self._tables['temp_table']}")
+            )
 
         elif self.has_pa_table:
             self._rel = to_relation(
-                table=self._pa_table,
+                self._drop_sort_distinct(table=self.pa_table),
                 ddb=self.ddb,
             )
 
@@ -340,10 +364,9 @@ class Reader(BaseDataSet):
                 self.load_dataset()
 
             self._rel = to_relation(
-                table=self._dataset,
+                self._drop_sort_distinct(table=self.dataset),
                 ddb=self.ddb,
             )
-        self._rel = self._drop_sort_distinct(table=self._rel)
 
         return self._rel
 
@@ -354,22 +377,34 @@ class Reader(BaseDataSet):
         if self._caching and not self.cached:
             self._to_cache()
 
-        if self.has_pa_table:
-            table = to_polars(self._pa_table)
+        if self.has_table_:
+            self._pl_dataframe = to_polars(
+                self._drop_sort_distinct(
+                    table=self.ddb.query(f"SELECT * FROM {self._tables['table_']}")
+                )
+            )
+
+        elif self.has_pa_table:
+            self._pl_dataframe = to_polars(
+                self._drop_sort_distinct(table=self.pa_table)
+            )
 
         elif self.has_temp_table:
-
-            table = self.ddb.query(f"SELECT * FROM {self._tables['temp_table']}")
+            self._pl_dataframe = to_polars(
+                self._drop_sort_distinct(
+                    table=self.ddb.query(f"SELECT * FROM {self._tables['temp_table']}")
+                )
+            )
 
         elif self.has_relation:
-            table = self._rel
+            self._pd_dataframe = to_polars(self._drop_sort_distinct(table=self.rel))
 
         else:
             if not self.has_dataset:
                 self.load_dataset()
-            table = self.dataset
-
-        self._pl_dataframe = to_polars(self._drop_sort_distinct(table=table))
+            self._pl_dataframe = to_pato_polarsndas(
+                self._drop_sort_distinct(table=self.dataset)
+            )
 
         return self._pl_dataframe
 
@@ -380,22 +415,33 @@ class Reader(BaseDataSet):
         if self._caching and not self.cached:
             self._to_cache()
 
-        if self.has_pa_table:
-            table = to_polars(self._pa_table)
+        if self.has_table_:
+            self._pd_dataframe = to_pandas(
+                self._drop_sort_distinct(
+                    table=self.ddb.query(f"SELECT * FROM {self._tables['table_']}")
+                )
+            )
+
+        elif self.has_pa_table:
+            self._pd_dataframe = to_pandas(
+                self._drop_sort_distinct(table=self.pa_table)
+            )
 
         elif self.has_temp_table:
 
-            table = self.ddb.query(f"SELECT * FROM {self._tables['temp_table']}")
+            self._pd_dataframe = to_pandas(
+                self._drop_sort_distinct(
+                    table=self.ddb.query(f"SELECT * FROM {self._tables['temp_table']}")
+                )
+            )
 
         elif self.has_relation:
-            table = self._rel
+            self._pd_dataframe = to_pandas(self._drop_sort_distinct(table=self.rel))
 
         else:
             if not self.has_dataset:
                 self.load_dataset()
-            table = self.dataset
-
-        self._pd_dataframe = to_pandas(self._drop_sort_distinct(table=table))
+            self._pd_dataframe = to_pandas(self._drop_sort_distinct(table=self.dataset))
 
         return self._pd_dataframe
 
@@ -452,6 +498,10 @@ class Reader(BaseDataSet):
     @property
     def has_temp_table(self) -> bool:
         return "temp_table" in self._tables
+
+    @property
+    def has_table_(self) -> bool:
+        return "table_" in self._tables
 
     @property
     def has_pa_table(self) -> bool:

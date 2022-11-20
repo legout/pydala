@@ -75,6 +75,17 @@ class TimeFly(BaseFileSystem):
     def _timestamp_to_snapshot(ts: dt.datetime) -> str:
         return ts.strftime("%Y%m%d_%H%M%S")
 
+    def get_format(self):
+        if "current" in self.config:
+            return self.config["current"]["format"]
+        else:
+            return self.infer_format()
+
+    def set_format(self, format:str|None):
+        if fomat is None:
+            format = self.get_format()
+        self._format = format
+
     def infer_format(self):
         all_ext = sorted(
             {
@@ -99,12 +110,16 @@ class TimeFly(BaseFileSystem):
                 return "directory"
 
     def infer_columns(self, format: str | None = None) -> list:
-        columns = ds.dataset(
-            self._fs.glob(os.path.join(self._path, f"**{format}")),
-            format=format,
-            filesystem=self._fs,
-        ).schema.names
-        return columns
+        if not format:
+            format = self.get_format()
+
+        if format:
+            columns = ds.dataset(
+                self._fs.glob(os.path.join(self._path, f"**{format}")),
+                format=format,
+                filesystem=self._fs,
+            ).schema.names
+            return columns
 
     def infer_compression(self) -> str | None:
         last_file = self._fs.glob(os.path.join(self._path, "**"))[-1]
@@ -159,7 +174,7 @@ class TimeFly(BaseFileSystem):
             self.new(name=name, description=description, save=False)
 
         if self.datafiles_in_root:
-            format = format or self.infer_format()
+            format = format or self.get_format()
             columns = columns or self.infer_columns(format=format)
             partitioning = partitioning or self.infer_partitioning()
 
@@ -212,9 +227,10 @@ class TimeFly(BaseFileSystem):
 
         now = self._now()
         if not self.current_empty:
+            format = self.get_format()
             snapshot = {
                 "creaded": now,
-                "format": format or self.config["current"]["format"],
+                "format": format,
                 "compression": compression or self.config["current"]["compression"],
                 "partitioning": partitioning or self.config["current"]["partitioning"],
                 "sort_by": sort_by or self.config["current"]["sort_by"],
@@ -233,7 +249,7 @@ class TimeFly(BaseFileSystem):
             self._cp(
                 os.path.join(self._path, "current"),
                 os.path.join(self._path, "snapshot", self._timestamp_to_snapshot(now)),
-                format=format or self.config["current"]["format"],
+                format=format,
             )
             self.write_config()
 
@@ -389,17 +405,25 @@ class TimeFly(BaseFileSystem):
 
     @property
     def current_empty(self):
-        return (
-            len(self._fs.glob(os.path.join(self._path, f"current/*.{self._format}")))
-            == 0
-        )
+        format = self.get_format()
+        if format:
+            return (
+                len(self._fs.glob(os.path.join(self._path, f"current/*.{format}")))
+                == 0
+            )
+        else:
+            return True
 
     @property
     def snapshot_empty(self):
-        return (
-            len(self._fs.glob(os.path.join(self._path, f"snapshot/**.{self._format}")))
-            == 0
-        )
+        format = self.get_format()
+        if format:
+            return (
+                len(self._fs.glob(os.path.join(self._path, f"snapshot/**.{format}")))
+                == 0
+            )
+        else:
+            return True
 
     @property
     def datafiles_in_root(self):

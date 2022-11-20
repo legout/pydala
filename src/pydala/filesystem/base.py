@@ -177,7 +177,7 @@ class BaseFileSystem:
         if self._cached:
             self._fs = self._filesystem["fsspec_cache"]
             if self._use_pyarrow_fs:
-                self._pafs = self._filesystem["pyarrow_cache"]
+                self._fs = self._filesystem["pyarrow_cache"]
             else:
                 self._pafs = None
         else:

@@ -62,7 +62,7 @@ class Writer(BaseDataSet):
             pyarrow_fs=pyarrow_fs,
             use_pyarrow_fs=use_pyarrow_fs,
         )
-        self._base_path = self._path.copy()
+        self._base_path = self._path
         del self._path
 
         if isinstance(self._partitioning, str):
@@ -73,7 +73,7 @@ class Writer(BaseDataSet):
 
         self.compression()
         self.partitioning()
-        self.mode()
+        self.mode(value=mode)
 
         self._base_name = base_name
 
@@ -87,12 +87,12 @@ class Writer(BaseDataSet):
 
         if flavor:  # is not None:
             self._partitioning_flavor = flavor
-            
+
         self.logger.info(f"{self._partitioning} - {self._partitioning_flavor}")
-        
+
         return self
 
-    def compression(self, value: str | None = None):
+    def compression(self, value: str | None = "zstd"):
         self._compression = value
         self.logger.info(self._compression)
 
@@ -101,9 +101,9 @@ class Writer(BaseDataSet):
     def format(self, value: str | None = None):
         if value:  # is not None:
             self._format = value
-            
+
         self.logger.info(self._format)
-        
+
         return self
 
     def mode(self, value: str | None):
@@ -159,6 +159,7 @@ class Writer(BaseDataSet):
 
         return zip(filters, all_partitions)
 
+    @log_decorator(show_arguments=False)
     def _handle_write_mode(
         self,
         table: duckdb.DuckDBPyRelation,
@@ -166,12 +167,15 @@ class Writer(BaseDataSet):
         delta_subset: list | None = None,
         datetime_column: str | None = None,
         start_time: str | dt.datetime | None = None,
+        end_time: str | dt.datetime | None = None,
     ):
         self._fs.invalidate_cache()
 
         if datetime_column:  # is not None:
             if not start_time:
-                start_time = table.max(datetime_column).fetchone()[0]
+                start_time = table.min(datetime_column).fetchone()[0]
+            if not end_time:
+                end_time = table.max(datetime_column).fetchone()[0]
 
         if self._fs.exists(path):
 
@@ -183,7 +187,8 @@ class Writer(BaseDataSet):
                 )
 
             elif self._mode == "overwrite":
-                self._fs.rm(path, recursive=True)
+                if self._fs.exists(path):
+                    self._fs.rm(path, recursive=True)
                 return table
 
             elif self._mode == "append":
@@ -200,15 +205,14 @@ class Writer(BaseDataSet):
                     use_pyarrow_fs=self._use_pyarrow_fs,
                 )
 
-                if existing_table.disk_usage / 1024**2 <= 100:
-                    existing_table.load_pa_table()
-
                 tables_diff = get_tables_diff(
-                    table1=table.filter(f"{datetime_column}>='{start_time}'")
+                    table1=table.filter(
+                        f"{datetime_column}>='{start_time}' AND {datetime_column}<'{end_time}'"
+                    )
                     if datetime_column  # is not None
                     else table,
                     table2=existing_table.rel.filter(
-                        f"{datetime_column}>='{start_time}'"
+                        f"{datetime_column}>='{start_time}' AND {datetime_column}<'{end_time}'"
                     )
                     if datetime_column  # is not None
                     else existing_table.rel,
@@ -233,11 +237,22 @@ class Writer(BaseDataSet):
         batch_size: int | str | None,
         datetime_column: str | None = None,
         start_time: str | dt.datetime | None = None,
+        end_time: str | dt.datetime | None = None,
+        base_path: str | None = None,
+        delta_subset: list | None = None,
     ):
 
         if isinstance(batch_size, int):
             for i in progressbar.progressbar(range(table.shape[0] // batch_size + 1)):
-                yield table.limit(batch_size, offset=i * batch_size)
+                table_ = table.limit(batch_size, offset=i * batch_size)
+                table_ = self._handle_write_mode(
+                    table=table_,
+                    path=base_path,
+                    delta_subset=delta_subset,
+                    datetime_column=datetime_column,
+                   
+                )
+                yield table_
 
         elif isinstance(batch_size, str):
             if not datetime_column:
@@ -285,13 +300,15 @@ class Writer(BaseDataSet):
 
             if not start_time:  # is not None:
                 start_time = table.min(datetime_column).fetchone()[0]
-
-            end_time = table.max(datetime_column).fetchone()[0]
+            if not end_time:
+                end_time = table.max(datetime_column).fetchone()[0]
 
             print(start_time, end_time, interval)
             timestamps = (
                 self.ddb.query(
-                    f"SELECT * FROM generate_series(TIMESTAMP '{start_time}', TIMESTAMP '{end_time}' + {interval}, {interval})"
+                    f"""SELECT * FROM generate_series(
+                        TIMESTAMP '{start_time}', TIMESTAMP '{end_time}' + {interval}, {interval})
+                    """
                 )
                 .arrow()["generate_series"]
                 .to_pylist()
@@ -302,14 +319,20 @@ class Writer(BaseDataSet):
             ):
                 filter = f"{datetime_column} >= TIMESTAMP '{sd}' AND {datetime_column} < TIMESTAMP '{ed}'"
 
-                table_part = table.filter(filter)
-
-                yield table_part
+                table_ = table.filter(filter)
+                table_ = self._handle_write_mode(
+                    table=table_,
+                    path=base_path,
+                    delta_subset=delta_subset,
+                    datetime_column=datetime_column,
+                    start_time=sd,
+                    end_time=ed,
+                )
+                yield table_
 
         else:
             yield table
 
-    @log_decorator(show_arguments=False)
     def write_table(
         self,
         table: pa.Table,
@@ -362,6 +385,7 @@ class Writer(BaseDataSet):
         row_group_size: int | None = None,
         datetime_column: str | None = None,
         start_time: str | dt.datetime | None = None,
+        end_time: str | dt.datetime | None = None,
         delta_subset: list | None = None,
         transform_func: object | None = None,
         transform_func_kwargs: dict | None = None,
@@ -392,14 +416,6 @@ class Writer(BaseDataSet):
                     self._gen_path(partition_names=partition_names)
                 )
 
-                table_part = self._handle_write_mode(
-                    table=table_part,
-                    path=partition_base_path,
-                    delta_subset=delta_subset,
-                    datetime_column=datetime_column,
-                    start_time=start_time,
-                )
-
                 # Write table for partition
 
                 if table_part.shape[0] > 0:
@@ -409,6 +425,9 @@ class Writer(BaseDataSet):
                         batch_size=batch_size,
                         datetime_column=datetime_column,
                         start_time=start_time,
+                        end_time=end_time,
+                        base_path=partition_base_path,
+                        delta_subset=delta_subset,
                     ):
                         if transform_func:  # is not None:
                             table_ = to_relation(
@@ -426,13 +445,7 @@ class Writer(BaseDataSet):
         else:
             # check if base_path for partition is empty and act depending on mode and distinct.
             base_path = os.path.dirname(self._gen_path(partition_names=None))
-            self._table = self._handle_write_mode(
-                table=self._table,
-                path=base_path,
-                delta_subset=delta_subset,
-                datetime_column=datetime_column,
-                start_time=start_time,
-            )
+           
 
             # write table
 
@@ -442,6 +455,9 @@ class Writer(BaseDataSet):
                     batch_size=batch_size,
                     datetime_column=datetime_column,
                     start_time=start_time,
+                    end_time=end_time,
+                    base_path=base_path,
+                    delta_subset=delta_subset,
                 ):
                     if transform_func:  # is not None:
                         table_ = to_relation(

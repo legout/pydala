@@ -10,7 +10,7 @@ def to_polars(
     | pd.DataFrame
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
-    | ds.FileSystemDataset,
+    | pa._dataset.Dataset,
 ) -> pl.DataFrame:
 
     if isinstance(table, pa.Table):
@@ -19,7 +19,7 @@ def to_polars(
     elif isinstance(table, pd.DataFrame):
         pl_dataframe = pl.from_pandas(table)
 
-    elif isinstance(table, ds.FileSystemDataset):
+    elif isinstance(table, pa._dataset.Dataset):
         pl_dataframe = pl.from_arrow(table.to_table())
 
     elif isinstance(table, duckdb.DuckDBPyRelation):
@@ -36,7 +36,7 @@ def to_pandas(
     | pd.DataFrame
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
-    | ds.FileSystemDataset,
+    | pa._dataset.Dataset,
 ) -> pd.DataFrame:
 
     if isinstance(table, pa.Table):
@@ -45,7 +45,7 @@ def to_pandas(
     elif isinstance(table, pl.DataFrame):
         pd_dataframe = table.to_pandas()
 
-    elif isinstance(table, ds.FileSystemDataset):
+    elif isinstance(table, pa._dataset.Dataset):
         pd_dataframe = table.to_table().to_pandas()
 
     elif isinstance(table, duckdb.DuckDBPyRelation):
@@ -60,7 +60,7 @@ def to_pandas(
 def to_relation(
     table: duckdb.DuckDBPyRelation
     | pa.Table
-    | ds.FileSystemDataset
+    | pa._dataset.Dataset
     | pd.DataFrame
     | pl.DataFrame
     | str,
@@ -71,7 +71,7 @@ def to_relation(
 
         return ddb.from_arrow(table)
 
-    elif isinstance(table, ds.FileSystemDataset):
+    elif isinstance(table, pa._dataset.Dataset):
 
         table = ddb.from_arrow(table)
 
@@ -105,7 +105,7 @@ def sort_table(
     | pd.DataFrame
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
-    | ds.FileSystemDataset,
+    | pa._dataset.Dataset,
     sort_by: str | list | tuple | None,
     ascending: bool | list | tuple | None,
     ddb: duckdb.DuckDBPyConnection | None = None,
@@ -126,7 +126,7 @@ def sort_table(
         elif isinstance(table, pd.DataFrame):
             return to_polars(table=table).sort(by=sort_by, reverse=reverse).to_pandas()
 
-        elif isinstance(table, ds.FileSystemDataset):
+        elif isinstance(table, pa._dataset.Dataset):
             return to_polars(table=table).sort(by=sort_by, reverse=reverse).to_arrow()
 
         elif isinstance(table, pl.DataFrame):
@@ -145,13 +145,13 @@ def get_tables_diff(
     | pd.DataFrame
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
-    | ds.FileSystemDataset
+    | pa._dataset.Dataset
     | str,
     table2: pa.Table
     | pd.DataFrame
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
-    | ds.FileSystemDataset
+    | pa._dataset.Dataset
     | str,
     subset: list | None = None,
     cast_as_str: bool = False,
@@ -198,7 +198,7 @@ def get_tables_diff(
         print("No subset given")
         diff = table1_.except_(table2_.project(",".join(table1_.columns)))
 
-    if isinstance(table1, (pa.Table, ds.FileSystemDataset)):
+    if isinstance(table1, (pa.Table, pa._dataset.Dataset)):
         if isinstance(diff, pl.DataFrame):
             return diff.to_arrow()
         else:
@@ -242,7 +242,7 @@ def distinct_table(
     | pd.DataFrame
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
-    | ds.FileSystemDataset,
+    | pa._dataset.Dataset,
     subset: list | None = None,
     keep: str = "first",
     presort_by: str | list | None = None,
@@ -250,7 +250,7 @@ def distinct_table(
     ddb: duckdb.DuckDBPyConnection | None = None,
 ) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
 
-    if isinstance(table, (pa.Table, pd.DataFrame, pl.DataFrame, ds.FileSystemDataset)):
+    if isinstance(table, (pa.Table, pd.DataFrame, pl.DataFrame, pa._dataset.Dataset)):
         table = to_polars(table=table)
         if presort_by:
             table = sort_table(table=table, sort_by=presort_by, ddb=ddb)
@@ -273,7 +273,7 @@ def distinct_table(
 
         if isinstance(table, pd.DataFrame):
             return table.to_pandas()
-        elif isinstance(table, (pa.Table, ds.FileSystemDataset)):
+        elif isinstance(table, (pa.Table, pa._dataset.Dataset)):
             return table.to_arrow()
         else:
             return table
@@ -304,7 +304,7 @@ def drop_columns(
     | pd.DataFrame
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
-    | ds.FileSystemDataset,
+    | pa._dataset.Dataset,
     columns: str | list | None = None,
 ) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
     if isinstance(columns, str):
@@ -323,7 +323,7 @@ def drop_columns(
                 return table.drop(columns=columns)
             return table
 
-        elif isinstance(table, ds.FileSystemDataset):
+        elif isinstance(table, pa._dataset.Dataset):
             columns = [col for col in table.schema.names if col not in columns]
             if len(columns) > 0:
                 return table.to_table(columns=columns)

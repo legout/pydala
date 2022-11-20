@@ -1,4 +1,4 @@
-from .datalake import Manager
+from .datalake.manager import Manager
 from .dataset.reader import Reader as DatasetReader
 from .dataset.reader import TimeFlyReader as DatasetTimeFlyReader
 from .dataset.repartition import Repartition as DatasetRepartition

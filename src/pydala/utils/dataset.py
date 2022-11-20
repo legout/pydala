@@ -1,8 +1,11 @@
 import polars as pl
 import pyarrow as pa
+import pyarrow.dataset as ds
+from fsspec import spec
+from pyarrow.fs import FileSystem
 
 
-def _pyarrow_schema_auto_conversion(
+def _pyarrow_unified_schema(
     schema1: pa.Schema, schema2: pa.Schema
 ) -> tuple[dict, bool]:
     schema = []
@@ -40,7 +43,7 @@ def _pyarrow_schema_auto_conversion(
     return pa.schema(schema), schemas_equal
 
 
-def _polars_schema_auto_conversion(schema1: dict, schema2: dict) -> tuple[dict, bool]:
+def _polars_unified_schema(schema1: dict, schema2: dict) -> tuple[dict, bool]:
     schema = {}
     schemas_equal = True
     dtype_rank = [
@@ -75,14 +78,33 @@ def _polars_schema_auto_conversion(schema1: dict, schema2: dict) -> tuple[dict, 
     return schema, schemas_equal
 
 
-def schema_auto_conversion(schemas: list[pa.Schema] | list[dict]):
+def list_schemas(
+    path: str | None = None,
+    dataset: pa._dataset.Dataset | None = None,
+    filesystem: spec.AbstractFileSystem | FileSystem | None = None,
+):
+    if path:
+        dataset = ds.dataset(path, filesystem=filesystem)
+    else:
+        if not dataset:
+            raise ValueError("Either path or dataset must be not None.")
+
+    all_schemas = [frag.physical_schema for frag in dataset.get_fragments()]
+    return all_schemas
+
+
+def get_unified_schema(schemas: list[pa.Schema] | list[dict]|None=None, path:str|None=None, dataset:pa._dataset.Dataset|None=None, filesystem:spec.AbstractFileSystem|FileSystem|None=None):
+    if not schemas:
+        schemas = list_schemas(path=path, dataset=dataset, filesystem=filesystem)
+
+
     schemas_equal = True
     schema = schemas[0]
     for schema2 in schemas[1:]:
         schema, schemas_qual_ = (
-            _pyarrow_schema_auto_conversion(schema, schema2)
+            _pyarrow_unified_schema(schema, schema2)
             if isinstance(schema, pa.Schema)
-            else _polars_schema_auto_conversion(schema, schema2)
+            else _polars_unified_schema(schema, schema2)
         )
 
         if not schemas_qual_:

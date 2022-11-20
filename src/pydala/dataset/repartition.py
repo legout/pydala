@@ -37,6 +37,7 @@ class Repartition:
                 self._reader._to_cache()
 
             elif self._caching_method == "temp_table":
+                self._source_table = "temp_table"
                 self._reader.create_temp_table()
 
             else:
