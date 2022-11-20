@@ -16,6 +16,7 @@ class Repartition:
     ):
         self._reader = reader
         self._writer = writer
+        self._writer.ddb = self._reader.ddb
 
         self._caching_method = caching_method
         self._source_table = source_table
