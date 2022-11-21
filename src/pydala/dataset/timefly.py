@@ -2,14 +2,14 @@ import datetime as dt
 import os
 import pprint
 
-import pyarrow.dataset as ds
+import pyarrow as pa
 import pyarrow.parquet as pq
-import rtoml
 from fsspec import spec
 from pyarrow.fs import FileSystem
 
 from ..filesystem.base import BaseFileSystem
 from ..utils.base import read_toml, write_toml
+from ..utils.dataset import get_unified_schema, pyarrow_schema_to_dict
 from ..utils.logging import log_decorator
 
 
@@ -110,17 +110,12 @@ class TimeFly(BaseFileSystem):
             elif (last_file.split(self._path)[-1].split("/")) > 1:
                 return "directory"
 
-    def infer_columns(self, format: str | None = None, sub_path: str = "") -> list:
+    def infer_schema(self, format: str | None = None, sub_path: str = "") -> list:
         if not format:
             format = self.get_format()
 
         if format:
-            columns = ds.dataset(
-                self._fs.glob(os.path.join(self._path, sub_path, f"**{format}")),
-                format=format,
-                filesystem=self._fs,
-            ).schema.names
-            return columns
+            return get_unified_schema(path=self._path, filesystem=self._fs)
 
     def infer_compression(self, sub_path: str = "") -> str | None:
         last_file = self._fs.glob(os.path.join(self._path, sub_path, "**"))[-1]
@@ -166,7 +161,8 @@ class TimeFly(BaseFileSystem):
         sort_by: str | None = None,
         ascending: str | None = None,
         distinct: bool | None = None,
-        columns: list | None = None,
+        schema: dict | None = None,
+        schema_unique: bool | None = None,
         batch_size: int | str | None = None,
         comment: str = None,
     ):
@@ -178,9 +174,13 @@ class TimeFly(BaseFileSystem):
         if self.has_current:
             if not self.current_empty:
                 format = format or self.get_format(sub_path="current")
-                columns = columns or self.infer_columns(
-                    format=format, sub_path="current"
-                )
+                if not schema:
+                    schema, schema_unique_ = self.infer_schema(
+                        format=format, sub_path="current"
+                    )
+                if not schema_unique:
+                    schema_unique = schema_unique_
+
                 partitioning = partitioning or self.infer_partitioning(
                     sub_path="current"
                 )
@@ -188,6 +188,9 @@ class TimeFly(BaseFileSystem):
                 if compression is None:
                     if format == "parquet":
                         compression = self.infer_compression(sub_path="current")
+
+            if schema:
+                schema = pyarrow_schema_to_dict(schema)
 
             current = {
                 "created": self._now(),
@@ -197,7 +200,8 @@ class TimeFly(BaseFileSystem):
                 "sort_by": sort_by or None,
                 "ascending": ascending or True,
                 "distinct": distinct or False,
-                "columns": columns or [],
+                "schema": schema or {},
+                "schema_unique": schema_unique or None,
                 "batch_size": batch_size or None,
                 "comment": comment or "initialized",
             }
@@ -224,7 +228,8 @@ class TimeFly(BaseFileSystem):
         sort_by: str | None = None,
         ascending: str | None = None,
         distinct: bool | None = None,
-        columns: list | None = None,
+        schema: dict | None = None,
+        schema_unique: bool | None = None,
         batch_size: int | str | None = None,
         comment: str | None = None,
     ) -> None:
@@ -243,7 +248,8 @@ class TimeFly(BaseFileSystem):
                     sort_by=sort_by,
                     ascending=ascending,
                     distinct=distinct,
-                    columns=columns,
+                    schema=schema,
+                    schema_unique=schema_unique,
                     batch_size=batch_size,
                     comment=comment,
                 )
@@ -256,7 +262,9 @@ class TimeFly(BaseFileSystem):
                 "sort_by": sort_by or self._config["current"]["sort_by"],
                 "ascending": ascending or self._config["current"]["ascending"],
                 "distinct": distinct or self._config["current"]["distinct"],
-                "columns": columns or self._config["current"]["columns"],
+                "schema": schema or self._config["current"]["schema"],
+                "schema_unique": schema_unique
+                or self._config["current"]["schema_unique"],
                 "batch_size": batch_size or self._config["current"]["batch_size"],
                 "comment": comment or "",
             }

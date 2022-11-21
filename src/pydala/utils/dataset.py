@@ -20,9 +20,16 @@ def _pyarrow_unified_schema(
         pa.float64(),
         pa.string(),
     ]
-    for name in schema1.names:
-        type1 = schema1.field(name).type
-        type2 = schema2.field(name).type
+    all_names = sorted(set(schema1.names + schema2.names))
+    for name in all_names:
+        if name in schema1.names:
+            type1 = schema1.field(name).type
+        else:
+            type1 = schema2.field(name).type
+        if name in schema2.names:
+            type2 = schema2.field(name).type
+        else:
+            type2 = schema1.field(name).type
 
         if type1 != type2:
             schemas_equal = False
@@ -55,10 +62,16 @@ def _polars_unified_schema(schema1: dict, schema2: dict) -> tuple[dict, bool]:
         pl.Float64(),
         pl.Utf8(),
     ]
-
-    for name in schema1:
-        type1 = schema1[name]
-        type2 = schema2[name]
+    all_names = sorted(set(list(schema1.keys()) + list(schema2.keys())))
+    for name in all_names:
+        if name in schema1:
+            type1 = schema1[name]
+        else:
+            type1 = schema2[name]
+        if name in schema2:
+            type2 = schema2[name]
+        else:
+            type2 = schema1[name]
 
         if type1 != type2:
             schemas_equal = False
@@ -105,13 +118,44 @@ def get_unified_schema(
     schemas_equal = True
     schema = schemas[0]
     for schema2 in schemas[1:]:
-        schema, schemas_qual_ = (
+        schema, schemas_equal_ = (
             _pyarrow_unified_schema(schema, schema2)
             if isinstance(schema, pa.Schema)
             else _polars_unified_schema(schema, schema2)
         )
 
-        if not schemas_qual_:
-            schemas_equal = schemas_qual_
+        if not schemas_equal_:
+            schemas_equal = schemas_equal_
 
     return schema, schemas_equal
+
+
+def pyarrow_schema_to_dict(schema: pa.Schema):
+    return dict(zip(schema.names, map(_pyarrow_datatype_to_str, schema.types)))
+
+
+def _pyarrow_datatype_to_str(data_type: pa.DataType):
+    if isinstance(data_type, pa.DataType):
+        return str(data_type)
+    return data_type
+
+
+def _str_to_pyarrow_datatype(data_type: str):
+    if "timestamp" in data_type and "tz" in data_type:
+        tz = data_type.split("tz=")[-1].split("]")[0]
+        unit = data_type.split("[")[-1].split(",")[0].split("]")[0]
+
+        return pa.timestamp(unit=unit, tz=tz)
+
+    return pa.type_for_alias(data_type)
+
+
+def pyarrow_schema_from_dict(schema: dict):
+    return pa.schema(
+        dict(
+            zip(
+                list(schema.keys()),
+                map(_str_to_pyarrow_datatype, list(schema.values())),
+            )
+        )
+    )

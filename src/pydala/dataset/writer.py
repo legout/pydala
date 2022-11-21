@@ -542,7 +542,7 @@ class TimeFlyWriter(Writer):
 
     def set_snapshot(self, snapshot):
         self._snapshot_path = self.timefly._find_snapshot_subpath(snapshot)
-        self._base_path = os.path.join(self.timefly.path, self._snapshot_path)
+        self._base_path = os.path.join(self.timefly._path, self._snapshot_path)
 
     def wrire_dataset(
         self,
@@ -570,7 +570,7 @@ class TimeFlyWriter(Writer):
             start_time=start_time,
             end_time=end_time,
             delta_subset=delta_subset,
-            transform_func=transform_funct,
+            transform_func=transform_func,
             transform_func_kwargs=transform_func_kwargs,
             **kwargs,
         )

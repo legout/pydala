@@ -12,7 +12,7 @@ from fsspec import spec
 from pyarrow.fs import FileSystem
 
 from ..utils.base import convert_size_unit
-from ..utils.dataset import get_unified_schema
+from ..utils.dataset import get_unified_schema, pyarrow_schema_from_dict
 from ..utils.logging import log_decorator
 from ..utils.table import to_pandas, to_polars, to_relation
 from .base import BaseDataSet
@@ -27,6 +27,7 @@ class Reader(BaseDataSet):
         name: str | None = None,
         partitioning: ds.Partitioning | list | str | None = None,
         format: str | None = "parquet",
+        schema: dict | pa.Schema | None = None,
         ddb: duckdb.DuckDBPyConnection | None = None,
         ddb_memory_limit: str = "-1",
         caching: bool = False,
@@ -59,47 +60,56 @@ class Reader(BaseDataSet):
             pyarrow_fs=pyarrow_fs,
             use_pyarrow_fs=use_pyarrow_fs,
         )
+        self._schema = schema
 
     def get_pyarrow_schema(self, **kwargs):
 
-        if self._format == "parquet":
-            dataset = self._get_dataset(**kwargs)
-            return get_unified_schema(dataset=dataset)
+        # if self._format == "parquet":
+        dataset = self._get_dataset(**kwargs)
+        return get_unified_schema(dataset=dataset)
 
-    def set_pyarrow_schema(self):
-        self._schema, self._schemas_equal = self.get_pyarrow_schema()
+    def set_pyarrow_schema(self, schema: dict | pa.Schema | None = None):
+        if schema:
+            if isinstance(schema, dict):
+                schema = pyarrow_schema_from_dict(schema)
+            self._schema = schema
+        else:
+            self._schema, self._schemas_equal = self.get_pyarrow_schema()
 
     def _gen_name(self, name: str | None):
         return f"{self._name}_{name}" if self._name else name  # is not None else name
 
     def _to_cache(self):
-        self._fs.invalidate_cache()
-        recursive = False if self._fs.isfile(self._path) else True
+        if self._fs.fs.protocol != "file":
+            self._fs.invalidate_cache()
+            recursive = False if self._fs.isfile(self._path) else True
 
-        if hasattr(self._fs, "has_s5cmd"):
-            if self._fs.has_s5cmd and self._profile:  # is not None:
-                self._fs.fs.sync(
-                    "s3://" + os.path.join(self._bucket or "", self._path),
-                    os.path.join(
-                        self._cache_bucket,
-                        os.path.dirname(self._path) if not recursive else self._path,
-                    ),
-                    recursive=recursive,
-                )
+            if hasattr(self._fs, "has_s5cmd"):
+                if self._fs.has_s5cmd and self._profile:  # is not None:
+                    self._fs.sync(
+                        "s3://" + os.path.join(self._bucket or "", self._path),
+                        os.path.join(
+                            self._cache_bucket,
+                            os.path.dirname(self._path)
+                            if not recursive
+                            else self._path,
+                        ),
+                        recursive=recursive,
+                    )
+                else:
+                    self._fs.get(
+                        self._path,
+                        os.path.join(self._cache_bucket, self._path),
+                        recursive=recursive,
+                    )
             else:
                 self._fs.get(
                     self._path,
                     os.path.join(self._cache_bucket, self._path),
                     recursive=recursive,
                 )
-        else:
-            self._fs.get(
-                self._path,
-                os.path.join(self._cache_bucket, self._path),
-                recursive=recursive,
-            )
 
-        # self._path = os.path.join(self._cache_bucket, self._path)
+            # self._path = os.path.join(self._cache_bucket, self._path)
         self._cached = True
         self._set_filesystem()
 
@@ -127,50 +137,42 @@ class Reader(BaseDataSet):
         # else:
         #    raise FileNotFoundError(f"{self._path} not found.")
 
-    def _load_parquet(self, **kwargs):
+    def _load_parquet(self, schema: dict | pa.Schema | None = None, **kwargs):
         # if self._fs.exists(self._path):
 
         use_pyarrow = False
         if hasattr(self, "_schema"):
             if self._schema and not self._schemas_equal:
                 use_pyarrow = True
+        try:
+            if self._fs.isfile(self._path):
 
-        if self._fs.isfile(self._path):
+                if self._use_pyarrow_fs:
+                    with self._pafs.open_input_file(self._path) as f:
+                        if use_pyarrow:
+                            pa_table = pl.read_parquet(
+                                source=f,
+                                use_pyarrow=True,
+                                pyarrow_options=dict(schema=self._schema),
+                                **kwargs,
+                            ).to_arrow()
+                        else:
+                            pa_table = pl.read_parquet(source=f, **kwargs).to_arrow()
 
-            if self._use_pyarrow_fs:
-                with self._pafs.open_input_file(self._path) as f:
-                    if use_pyarrow:
-                        pa_table = pl.read_parquet(
-                            source=f,
-                            use_pyarrow=True,
-                            pyarrow_options=dict(schema=self._schema),
-                            **kwargs,
-                        ).to_arrow()
-                    else:
-                        pa_table = pl.read_parquet(source=f, **kwargs).to_arrow()
+                else:
+
+                    with self._fs.open(self._path) as f:
+                        if use_pyarrow:
+                            pa_table = pl.read_parquet(
+                                source=f,
+                                use_pyarrow=True,
+                                pyarrow_options=dict(schema=self._schema),
+                                **kwargs,
+                            ).to_arrow()
+                        else:
+                            pa_table = pl.read_parquet(source=f, **kwargs).to_arrow()
 
             else:
-                with self._fs.open(self._path) as f:
-                    if use_pyarrow:
-                        pa_table = pl.read_parquet(
-                            source=f,
-                            use_pyarrow=True,
-                            pyarrow_options=dict(schema=self._schema),
-                            **kwargs,
-                        ).to_arrow()
-                    else:
-                        pa_table = pl.read_parquet(source=f, **kwargs).to_arrow()
-
-        else:
-            try:
-                pa_table = pq.read_table(
-                    self._path,
-                    partitioning=self._partitioning,
-                    filesystem=self._pafs if self._use_pyarrow_fs else self._fs,
-                    **kwargs,
-                )
-            except pa.ArrowInvalid:
-                self.set_pyarrow_schema()
                 pa_table = pq.read_table(
                     self._path,
                     partitioning=self._partitioning,
@@ -178,8 +180,11 @@ class Reader(BaseDataSet):
                     schema=self._schema,
                     **kwargs,
                 )
-
             return pa_table
+
+        except pa.ArrowInvalid:
+            self.set_pyarrow_schema(schema=schema)
+            return self._load_parquet(schema=schema, **kwargs)
 
         # else:
         #     raise FileNotFoundError(f"{self._path} not found.")
@@ -209,16 +214,21 @@ class Reader(BaseDataSet):
 
     def _get_dataset(self, schema: pa.Schema | None = None, **kwargs):
         if self._fs.exists(self._path):
-            dataset = ds.dataset(
-                source=self._path,
-                schema=schema,
-                format=self._format,
-                filesystem=self._pafs if self._use_pyarrow_fs else self._fs,
-                partitioning=self._partitioning,
-                **kwargs,
-            )
+            try:
+                dataset = ds.dataset(
+                    source=self._path,
+                    schema=schema,
+                    format=self._format,
+                    filesystem=self._pafs if self._use_pyarrow_fs else self._fs,
+                    partitioning=self._partitioning,
+                    **kwargs,
+                )
 
-            return dataset
+                return dataset
+
+            except pa.ArrowInvalid:
+                self.set_pyarrow_schema(schema=schema)
+                return self._get_dataset(schema=schema, **kwargs)
 
         else:
             raise IOError(f"Can not find {self._path}. No such file or directory.")
@@ -228,14 +238,11 @@ class Reader(BaseDataSet):
         self, name: str = "dataset", schema: pa.Schema | None = None, **kwargs
     ):
         if self._fs.exists(self._path):
+
             if self._caching and not self.is_cached:
                 self._to_cache()
 
-            if schema:  # is not None:
-                self._schema = schema
-                self._schemas_equal = True
-            else:
-                self.set_pyarrow_schema()
+            self.set_pyarrow_schema(schema=schema)
 
             name = self._gen_name(name=name)
 
@@ -244,6 +251,7 @@ class Reader(BaseDataSet):
             # self._dataset = name
             self._tables["dataset"] = name
             self.ddb.register(name, self._dataset)
+
         else:
             raise IOError(f"Can not find {self._path}. No such file or directory.")
 
