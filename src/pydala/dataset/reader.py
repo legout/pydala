@@ -582,6 +582,7 @@ class TimeFlyReader(Reader):
         fsspec_fs: spec.AbstractFileSystem | None = None,
         pyarrow_fs: FileSystem | None = None,
         use_pyarrow_fs: bool = False,
+        schema:dict|pa.Schema|None=None,
     ) -> None:
         self._base_path = base_path
         self.timefly = TimeFly(
@@ -619,7 +620,15 @@ class TimeFlyReader(Reader):
             fsspec_fs=fsspec_fs,
             pyarrow_fs=pyarrow_fs,
             use_pyarrow_fs=use_pyarrow_fs,
+            schema=schema
         )
+        
+        schema = self.timefly.config["current"].get("schema",None)
+        if schema=="None":
+            schema = None
+            
+        if schema:
+            self.set_pyarrow_schema(schema=schema)
 
     def set_snapshot(self, snapshot):
         self._snapshot_path = self.timefly._find_snapshot_subpath(snapshot)
