@@ -63,7 +63,7 @@ def get_logger(name: str, log_file: str | None = None, log_sub_dir: str | None =
     return logger
 
 
-def log_decorator(_func: str | None = None, show_arguments:bool=True):
+def log_decorator(_func: str | None = None, show_arguments: bool = True):
     def log_decorator_info(func):
         @functools.wraps(func)
         def log_decorator_wrapper(self, *args, **kwargs):
@@ -101,7 +101,9 @@ def log_decorator(_func: str | None = None, show_arguments:bool=True):
 
             """ Before to the function execution, log function details."""
             if show_arguments:
-                logger.info(f"Arguments: {formatted_arguments}. Start.", extra=extra_args)
+                logger.info(
+                    f"Arguments: {formatted_arguments}. Start.", extra=extra_args
+                )
             else:
                 logger.info(f"Start.", extra=extra_args)
             start = time.time()

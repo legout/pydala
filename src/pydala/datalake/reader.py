@@ -1,13 +1,15 @@
-from ..dataset.reader import TimeFlyReader
-from ..filesystem.base import BaseFileSystem
+import os
+
 import duckdb
 from fsspec import spec
 from pyarrow.fs import FileSystem
-import os
+
+from ..dataset.reader import TimeFlyReader
+from ..filesystem.base import BaseFileSystem
 from .manager import Manager
 
-class Reader(BaseFileSystem):
 
+class Reader(BaseFileSystem):
     def __init__(
         self,
         path: str,
@@ -44,11 +46,12 @@ class Reader(BaseFileSystem):
             log_sub_dir=log_sub_dir,
         )
         if use_pyarrow_fs:
-            self.manager = Manager(path=path, bucket=bucket, pyarrow_fs=self._fs, use_pyarrow_fs=True)
+            self.manager = Manager(
+                path=path, bucket=bucket, pyarrow_fs=self._fs, use_pyarrow_fs=True
+            )
         else:
             self.manager = Manager(path=path, bucket=bucket, fsspec_fs=self._fs)
 
-            
         if ddb:  # is not None:
             self.ddb = ddb
         else:
@@ -59,14 +62,19 @@ class Reader(BaseFileSystem):
         self._ddb_memory_limit = ddb_memory_limit
         self.ddb.execute(f"SET memory_limit='{self._ddb_memory_limit}'")
 
-    def _load_dataset_configs(self, paths:list|None=None):
+    def _load_dataset_configs(self, paths: list | None = None):
         self.manager.load(paths=paths)
 
-    def load(self, patsh:list|None=None):
+    def load(self, patsh: list | None = None):
         self._load_dataset_configs(paths=paths)
         self.reader = {}
         for dataset in self.manager.datasets:
             dataset_path = self.manager[dataset].config["dataset"]["path"]
             dataset_name = self.manager[dataset].config["dataset"]["name"]
-            self.reader[name] = TimeFlyReader(base_path=dataset_path, fsspec_fs=self._fs, pyarrow_fs=self._pafs, use_pyarrow_fs=self._use_pyarrow_fs)
-            #self.
+            self.reader[name] = TimeFlyReader(
+                base_path=dataset_path,
+                fsspec_fs=self._fs,
+                pyarrow_fs=self._pafs,
+                use_pyarrow_fs=self._use_pyarrow_fs,
+            )
+            # self.

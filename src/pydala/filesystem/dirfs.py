@@ -60,7 +60,7 @@ class DirFileSystem(DirFileSystem):
                     capture_output=True,
                 )
 
-            #return res
+            # return res
 
     def s5cp(self, src: str, dest: str, recursive=True, exclude: str | None = None):
         if self.has_s5cmd:
@@ -84,7 +84,7 @@ class DirFileSystem(DirFileSystem):
                     shell=True,
                     capture_output=True,
                 )
-            #return res
+            # return res
 
     def s5mv(self, src: str, dest: str, recursive=True, exclude: str | None = None):
         if self.has_s5cmd:
@@ -108,7 +108,7 @@ class DirFileSystem(DirFileSystem):
                     shell=True,
                     capture_output=True,
                 )
-            #return res
+            # return res
 
     def invalidate_cache(self, path=None):
         return self.fs.invalidate_cache(path=path)

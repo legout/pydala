@@ -1,5 +1,6 @@
 import datetime as dt
 import os
+import pprint
 
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
@@ -50,13 +51,13 @@ class TimeFly(BaseFileSystem):
 
     def read_config(self) -> None:
         if self.is_initialized:
-            self.config = read_toml(path=self._config_path, filesystem=self._fs)
+            self._config = read_toml(path=self._config_path, filesystem=self._fs)
         else:
             self.new()
 
     def write_config(self, pretty: bool = False) -> None:
         write_toml(
-            config=self.config,
+            config=self._config,
             path=self._config_path,
             filesystem=self._fs,
             pretty=pretty,
@@ -75,22 +76,22 @@ class TimeFly(BaseFileSystem):
     def _timestamp_to_snapshot(ts: dt.datetime) -> str:
         return ts.strftime("%Y%m%d_%H%M%S")
 
-    def get_format(self):
-        if "current" in self.config:
-            return self.config["current"]["format"]
+    def get_format(self, sub_path: str = ""):
+        if "current" in self._config:
+            return self._config["current"]["format"]
         else:
-            return self.infer_format()
+            return self.infer_format(sub_path=sub_path)
 
-    def set_format(self, format:str|None):
+    def set_format(self, format: str | None):
         if format is None:
             format = self.get_format()
         self._format = format
 
-    def infer_format(self):
+    def infer_format(self, sub_path: str = ""):
         all_ext = sorted(
             {
                 os.path.splitext(f)[1]
-                for f in self._fs.glob(os.path.join(self._path, "**"))
+                for f in self._fs.glob(os.path.join(self._path, sub_path, "**"))
             }
         )
         if "" in all_ext:
@@ -100,8 +101,8 @@ class TimeFly(BaseFileSystem):
         if len(all_ext) > 0:
             return all_ext[-1][1:]
 
-    def infer_partitioning(self) -> str | None:
-        last_file = self._fs.glob(os.path.join(self._path, "**"))[-1]
+    def infer_partitioning(self, sub_path: str = "") -> str | None:
+        last_file = self._fs.glob(os.path.join(self._path, sub_path, "**"))[-1]
 
         if not self._fs.isfile(last_file):
             if "=" in last_file:
@@ -109,20 +110,20 @@ class TimeFly(BaseFileSystem):
             elif (last_file.split(self._path)[-1].split("/")) > 1:
                 return "directory"
 
-    def infer_columns(self, format: str | None = None) -> list:
+    def infer_columns(self, format: str | None = None, sub_path: str = "") -> list:
         if not format:
             format = self.get_format()
 
         if format:
             columns = ds.dataset(
-                self._fs.glob(os.path.join(self._path, f"**{format}")),
+                self._fs.glob(os.path.join(self._path, sub_path, f"**{format}")),
                 format=format,
                 filesystem=self._fs,
             ).schema.names
             return columns
 
-    def infer_compression(self) -> str | None:
-        last_file = self._fs.glob(os.path.join(self._path, "**"))[-1]
+    def infer_compression(self, sub_path: str = "") -> str | None:
+        last_file = self._fs.glob(os.path.join(self._path, sub_path, "**"))[-1]
 
         with self._fs.open(last_file) as f:
             compression = pq.ParquetFile(f).metadata.row_group(0).column(0).compression
@@ -138,7 +139,7 @@ class TimeFly(BaseFileSystem):
         if name is None:
             name = self._path.replace("/", ".")
 
-        self.config = {}
+        self._config = {}
         dataset = {
             "name": name,
             "init": self._now(),
@@ -149,18 +150,16 @@ class TimeFly(BaseFileSystem):
             "profile": self._profile,
         }
 
-        self.config["dataset"] = dataset
-        self._fs.mkdir(os.path.join(self._path, "current"))
-        self._fs.mkdir(os.path.join(self._path, "snapshot"))
+        self._config["dataset"] = dataset
+        self._fs.makedirs(os.path.join(self._path, "current"), exist_ok=True)
+        self._fs.makedirs(os.path.join(self._path, "snapshot"), exist_ok=True)
 
         if save:
             self.write_config()
 
     @log_decorator()
-    def create(
+    def set_current(
         self,
-        name: str | None = None,
-        description: str | None = None,
         format: str | None = None,
         compression: str | None = None,
         partitioning: str | list | None = None,
@@ -169,18 +168,26 @@ class TimeFly(BaseFileSystem):
         distinct: bool | None = None,
         columns: list | None = None,
         batch_size: int | str | None = None,
-    ) -> None:
-        if not self.is_initialized:
-            self.new(name=name, description=description, save=False)
+        comment: str = None,
+    ):
 
         if self.datafiles_in_root:
-            format = format or self.get_format()
-            columns = columns or self.infer_columns(format=format)
-            partitioning = partitioning or self.infer_partitioning()
+            format = self.get_format()
+            self._mv(self._path, os.path.join(self._path, "current"), format=format)
 
-            if compression is None:
-                if format == "parquet":
-                    compression = self.infer_compression()
+        if self.has_current:
+            if not self.current_empty:
+                format = format or self.get_format(sub_path="current")
+                columns = columns or self.infer_columns(
+                    format=format, sub_path="current"
+                )
+                partitioning = partitioning or self.infer_partitioning(
+                    sub_path="current"
+                )
+
+                if compression is None:
+                    if format == "parquet":
+                        compression = self.infer_compression(sub_path="current")
 
             current = {
                 "created": self._now(),
@@ -192,19 +199,20 @@ class TimeFly(BaseFileSystem):
                 "distinct": distinct or False,
                 "columns": columns or [],
                 "batch_size": batch_size or None,
-                "comment": "initialized",
+                "comment": comment or "initialized",
             }
 
-            # move files to current
-            self._mv(self._path, os.path.join(self._path, "current"), format=format)
+            if "current" in self._config:
+                self._config["current"].update(currentt)
+            else:
+                self._config["current"] = current
 
-            self.config["current"] = current
-        self.write_config()
+            self.write_config()
 
     @log_decorator()
     def update(self, snapshot: str | None = None, **kwargs) -> None:
         snapshot = snapshot or "current"
-        self.config[snapshot].update(**kwargs)
+        self._config[snapshot].update(**kwargs)
         self.write_config()
 
     @log_decorator()
@@ -220,29 +228,41 @@ class TimeFly(BaseFileSystem):
         batch_size: int | str | None = None,
         comment: str | None = None,
     ) -> None:
-        if not "snapshot" in self.config:
-            self.config["snapshot"] = {}
-            self.config["snapshot"]["available"] = []
-            self.config["snapshot"]["deleted"] = []
+        if not "snapshot" in self._config:
+            self._config["snapshot"] = {}
+            self._config["snapshot"]["available"] = []
+            self._config["snapshot"]["deleted"] = []
 
         now = self._now()
         if not self.current_empty:
-            format = self.get_format()
+            if "current" not in self._config:
+                self.set_current(
+                    format=format,
+                    compression=compression,
+                    partitioning=partitioning,
+                    sort_by=sort_by,
+                    ascending=ascending,
+                    distinct=distinct,
+                    columns=columns,
+                    batch_size=batch_size,
+                    comment=comment,
+                )
+            format = self.get_format(sub_path="current")
             snapshot = {
-                "created": now,
+                "creaded": now,
                 "format": format,
-                "compression": compression or self.config["current"]["compression"],
-                "partitioning": partitioning or self.config["current"]["partitioning"],
-                "sort_by": sort_by or self.config["current"]["sort_by"],
-                "ascending": ascending or self.config["current"]["ascending"],
-                "distinct": distinct or self.config["current"]["distinct"],
-                "columns": columns or self.config["current"]["columns"],
-                "batch_size": batch_size or self.config["current"]["batch_size"],
+                "compression": compression or self._config["current"]["compression"],
+                "partitioning": partitioning or self._config["current"]["partitioning"],
+                "sort_by": sort_by or self._config["current"]["sort_by"],
+                "ascending": ascending or self._config["current"]["ascending"],
+                "distinct": distinct or self._config["current"]["distinct"],
+                "columns": columns or self._config["current"]["columns"],
+                "batch_size": batch_size or self._config["current"]["batch_size"],
                 "comment": comment or "",
             }
 
-            self.config["snapshot"][self._timestamp_to_snapshot(now)] = snapshot
-            self.config["snapshot"]["available"].append(
+            self._config["snapshot"][self._timestamp_to_snapshot(now)] = snapshot
+            self._config["snapshot"]["available"].append(
                 self._timestamp_to_snapshot(now)
             )
 
@@ -264,9 +284,9 @@ class TimeFly(BaseFileSystem):
         path = os.path.join(self._path, "snapshot", snapshot)
         if self._fs.exists(path):
             self._rm(path=path)
-            self.config["snapshot"].pop(snapshot)
-            self.config["snapshot"]["available"].remove(snapshot)
-            self.config["snapshot"]["deleted"].append(snapshot)
+            self._config["snapshot"].pop(snapshot)
+            self._config["snapshot"]["available"].remove(snapshot)
+            self._config["snapshot"]["deleted"].append(snapshot)
             self.write_config()
 
         else:
@@ -276,13 +296,13 @@ class TimeFly(BaseFileSystem):
 
     @property
     def available_snapshots(self):
-        if "snapshot" in self.config:
-            return self.config["snapshot"]["available"]
+        if "snapshot" in self._config:
+            return self._config["snapshot"]["available"]
 
     @property
     def deleted_snapshots(self):
-        if "snapshot" in self.config:
-            return self.config["snapshot"]["deleted"]
+        if "snapshot" in self._config:
+            return self._config["snapshot"]["deleted"]
 
     def _find_snapshot_subpath(self, timefly: dt.datetime | None):
 
@@ -290,7 +310,7 @@ class TimeFly(BaseFileSystem):
             available_snapshots = sorted(
                 map(
                     self._snapshot_to_timestamp,
-                    self.config["snapshot"]["available"],
+                    self._config["snapshot"]["available"],
                 )
             )
             snapshot_subpath = self._timestamp_to_snapshot(
@@ -312,22 +332,22 @@ class TimeFly(BaseFileSystem):
 
         if self._fs.exists(snapshot_path):
             current = {
-                "created": self.config["snapshot"][snapshot]["created"],
-                "format": self.config["snapshot"][snapshot]["format"],
-                "compression": self.config["snapshot"][snapshot]["compression"],
-                "partitioning": self.config["snapshot"][snapshot]["partitioning"],
-                "sort_by": self.config["snapshot"][snapshot]["sort_by"],
-                "ascending": self.config["snapshot"][snapshot]["ascending"],
-                "distinct": self.config["snapshot"][snapshot]["distinct"],
-                "columns": self.config["snapshot"][snapshot]["columns"],
-                "batch_size": self.config["snapshot"][snapshot]["batch_size"],
+                "created": self._config["snapshot"][snapshot]["created"],
+                "format": self._config["snapshot"][snapshot]["format"],
+                "compression": self._config["snapshot"][snapshot]["compression"],
+                "partitioning": self._config["snapshot"][snapshot]["partitioning"],
+                "sort_by": self._config["snapshot"][snapshot]["sort_by"],
+                "ascending": self._config["snapshot"][snapshot]["ascending"],
+                "distinct": self._config["snapshot"][snapshot]["distinct"],
+                "columns": self._config["snapshot"][snapshot]["columns"],
+                "batch_size": self._config["snapshot"][snapshot]["batch_size"],
                 "comment": f"Restored from snapshot {snapshot}",
             }
-            self.config["current"] = current
+            self._config["current"] = current
             self._cp(
                 snapshot_path,
                 current_path,
-                format=format or self.config["snapshot"][snapshot]["format"],
+                self._config["snapshot"][snapshot]["format"],
             )
             self.write_config()
         else:
@@ -351,14 +371,14 @@ class TimeFly(BaseFileSystem):
             except:
                 files = self._fs.glob(os.path.join(path1, f"**.{format}"))
                 path2 = path2.lstrip("/") + "/"
-                if not self._fs.exists(path2):
-                    self._fs.mkdir(path2)
+                # if not self._fs.exists(path2):
+                self._fs.makedirs(path2, exist_ok=True)
                 self._fs.mv(files, path2, recursive=True)
         else:
             files = self._fs.glob(os.path.join(path1, f"**.{format}"))
             path2 = path2.lstrip("/") + "/"
-            if not self._fs.exists(path2):
-                self._fs.mkdir(path2)
+            # if not self._fs.exists(path2):
+            self._fs.makedirs(path2, exist_ok=True)
             self._fs.mv(files, path2, recursive=True)
 
     def _cp(self, path1: str, path2: str, format: str) -> None:
@@ -377,15 +397,15 @@ class TimeFly(BaseFileSystem):
             except:
                 files = self._fs.glob(os.path.join(path1, f"**.{format}"))
                 path2 = path2.lstrip("/") + "/"
-                if not self._fs.exists(path2):
-                    self._fs.mkdir(path2)
+                # if not self._fs.exists(path2):
+                self._fs.makedirs(path2, exist_ok=True)
                 self._fs.cp(files, path2, recursive=True)
 
         else:
             files = self._fs.glob(os.path.join(path1, f"**.{format}"))
             path2 = path2.lstrip("/") + "/"
-            if not self._fs.exists(path2):
-                self._fs.mkdir(path2)
+            # if not self._fs.exists(path2):
+            self._fs.makedirs(path2, exist_ok=True)
             self._fs.cp(files, path2, recursive=True)
 
     def _rm(self, path: str) -> None:
@@ -405,18 +425,17 @@ class TimeFly(BaseFileSystem):
 
     @property
     def current_empty(self):
-        format = self.get_format()
+        format = self.get_format(sub_path="current")
         if format:
             return (
-                len(self._fs.glob(os.path.join(self._path, f"current/*.{format}")))
-                == 0
+                len(self._fs.glob(os.path.join(self._path, f"current/*.{format}"))) == 0
             )
         else:
             return True
 
     @property
     def snapshot_empty(self):
-        format = self.get_format()
+        format = self.get_format(sub_path="snapshot")
         if format:
             return (
                 len(self._fs.glob(os.path.join(self._path, f"snapshot/**.{format}")))
@@ -445,3 +464,13 @@ class TimeFly(BaseFileSystem):
         ]
 
         return any([ext in datafile_ext for ext in all_ext])
+
+    @property
+    def config(self):
+        pprint.pprint(
+            self._config,
+            sort_dicts=True,
+            indent=2,
+            compact=True,
+            width=80,
+        )

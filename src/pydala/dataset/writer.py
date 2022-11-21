@@ -159,7 +159,7 @@ class Writer(BaseDataSet):
 
         return zip(filters, all_partitions)
 
-    #@log_decorator(show_arguments=False)
+    # @log_decorator(show_arguments=False)
     def _handle_write_mode(
         self,
         table: duckdb.DuckDBPyRelation,
@@ -406,6 +406,7 @@ class Writer(BaseDataSet):
             batch_size = min(
                 self._table.shape[0], 1024**2 * 64 // self._table.shape[1]
             )
+        self._batch_size = batch_size
 
         if self._partitioning:  # is not None:
             filters = self._get_partition_filters()
@@ -542,3 +543,45 @@ class TimeFlyWriter(Writer):
     def set_snapshot(self, snapshot):
         self._snapshot_path = self.timefly._find_snapshot_subpath(snapshot)
         self._base_path = os.path.join(self.timefly.path, self._snapshot_path)
+
+    def wrire_dataset(
+        self,
+        table: duckdb.DuckDBPyRelation
+        | pa.Table
+        | ds.FileSystemDataset
+        | pd.DataFrame
+        | pl.DataFrame
+        | str,
+        batch_size: int | str | None = None,
+        row_group_size: int | None = None,
+        datetime_column: str | None = None,
+        start_time: str | dt.datetime | None = None,
+        end_time: str | dt.datetime | None = None,
+        delta_subset: list | None = None,
+        transform_func: object | None = None,
+        transform_func_kwargs: dict | None = None,
+        **kwargs,
+    ):
+        super().write_dataset(
+            table=table,
+            batch_size=batch_size,
+            row_group_size=row_group_size,
+            datetime_column=datetime_column,
+            start_time=start_time,
+            end_time=end_time,
+            delta_subset=delta_subset,
+            transform_func=transform_funct,
+            transform_func_kwargs=transform_func_kwargs,
+            **kwargs,
+        )
+
+        self.timefly.set_current(
+            format=self._format,
+            compression=self._compression,
+            partitioning=self._partitioning,
+            sort_by=self._sort_by,
+            ascending=self._ascending,
+            distinct=self._distinct,
+            columns=self._table.columns,
+            batch_size=self._batch_size,
+        )

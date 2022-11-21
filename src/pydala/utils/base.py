@@ -21,7 +21,7 @@ def get_logger(name: str, log_file: str):
 
     stdout_handler = logging.StreamHandler(sys.stdout)
     stdout_handler.setLevel(logging.INFO)
-    #stdout_handler.setFormatter(formatter)
+    # stdout_handler.setFormatter(formatter)
 
     # ath(log_file).mkdir(parents=True, exist_ok=True)
     # file_handler = logging.FileHandler(log_file)
@@ -122,17 +122,16 @@ def write_toml(
     filesystem: FileSystem | spec.AbstractFileSystem,
     pretty: bool = False,
 ) -> None:
-    
+
     if not filesystem.exists(path):
-        filesystem.mkdirs(path=os.path.dirname(path), exist_ok=True)    
-        
+        filesystem.mkdirs(path=os.path.dirname(path), exist_ok=True)
+
     with filesystem.open(path, "w") as f:
         rtoml.dump(
             NestedDictReplacer(config).replace(None, "None"),
             f,
             pretty=pretty,
         )
-        
 
 
 def create_nested_dict(key: str, val: Any, sep: str = ".") -> dict:

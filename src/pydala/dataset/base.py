@@ -10,8 +10,8 @@ from pyarrow.fs import FileSystem
 
 from ..filesystem.base import BaseFileSystem
 from ..utils.base import get_ddb_sort_str
-from ..utils.table import distinct_table, drop_columns, sort_table
 from ..utils.logging import log_decorator
+from ..utils.table import distinct_table, drop_columns, sort_table
 
 
 class BaseDataSet(BaseFileSystem):
@@ -103,18 +103,18 @@ class BaseDataSet(BaseFileSystem):
         self._distinct_params["subset"] = subset
         self._distinct_params["presort_by"] = presort_by
         self._distinct_params["postsort_by"] = postsort_by
-        
+
         self.logger.info(f"{self._distinct} - params: {repr(self._distinct_params)}")
-        
+
         return self
 
     def drop(self, columns: str | list | None = "__index_level_0__"):
         self._drop = columns
-        
+
         self.logger.info(self._drop)
-        
+
         return self
-    
+
     @log_decorator(show_arguments=False)
     def _drop_sort_distinct(
         self,

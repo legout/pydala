@@ -93,10 +93,14 @@ def list_schemas(
     return all_schemas
 
 
-def get_unified_schema(schemas: list[pa.Schema] | list[dict]|None=None, path:str|None=None, dataset:pa._dataset.Dataset|None=None, filesystem:spec.AbstractFileSystem|FileSystem|None=None):
+def get_unified_schema(
+    schemas: list[pa.Schema] | list[dict] | None = None,
+    path: str | None = None,
+    dataset: pa._dataset.Dataset | None = None,
+    filesystem: spec.AbstractFileSystem | FileSystem | None = None,
+):
     if not schemas:
         schemas = list_schemas(path=path, dataset=dataset, filesystem=filesystem)
-
 
     schemas_equal = True
     schema = schemas[0]

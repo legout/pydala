@@ -98,10 +98,15 @@ class Manager(BaseFileSystem):
 
         for path in paths:
             if self._use_pyarrow_fs:
-                tf = TimeFly(path=path, fsspec_fs=self._fs, pyarrow_fs=self._pafs, use_pyarrow_fs=True)
+                tf = TimeFly(
+                    path=path,
+                    fsspec_fs=self._fs,
+                    pyarrow_fs=self._pafs,
+                    use_pyarrow_fs=True,
+                )
             else:
                 tf = TimeFly(path=path, fsspec_fs=self._fs)
-                
+
             if "name" in tf.config["dataset"]:
                 name = tf.config["dataset"]["name"]
             else:
@@ -133,13 +138,13 @@ class Manager(BaseFileSystem):
     def add_dataset(self, path: str, clean: bool = False, **kwargs):
         name = path.replace("/", ".")
         # self.datasets[name] = {}
-        
+
         self.datasets[name] = TimeFly(
-                path=path,
-                fsspec_fs=self._fs,
-                pyarrow_fs=self._pafs,
-                use_pyarrow_fs=self._use_pyarrow_fs,
-            )
+            path=path,
+            fsspec_fs=self._fs,
+            pyarrow_fs=self._pafs,
+            use_pyarrow_fs=self._use_pyarrow_fs,
+        )
 
         if self._fs.exists(path):
 

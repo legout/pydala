@@ -1,6 +1,8 @@
 import fsspec
 import pyarrow.fs as pafs
+
 from .s5cmd import S5CmdFileSystem
+
 
 def fsspec_filesystem(
     protocol: str = "s3",

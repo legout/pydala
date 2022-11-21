@@ -24,7 +24,7 @@ class S5CmdFileSystem(S3FileSystem):
         version_aware: bool = False,
         config_kwargs: dict | None = None,
         s3_additional_kwargs: dict | None = None,
-        session:AioSession|None=None,
+        session: AioSession | None = None,
         username: str | None = None,
         password: str | None = None,
         cache_regions: bool = False,
@@ -47,10 +47,9 @@ class S5CmdFileSystem(S3FileSystem):
                 client_kwargs = dict(region_name=region)
             else:
                 client_kwargs["region_name"] = region
-        
 
         if profile is not None:
-            os.environ["AWS_PROFILE"] = profile            
+            os.environ["AWS_PROFILE"] = profile
 
         super().__init__(
             anon=anon,

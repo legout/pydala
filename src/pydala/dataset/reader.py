@@ -104,108 +104,108 @@ class Reader(BaseDataSet):
         self._set_filesystem()
 
     def _load_feather(self, **kwargs):
-        if self._fs.exists(self._path):
-            if self._fs.isfile(self._path):
+        # if self._fs.exists(self._path):
+        if self._fs.isfile(self._path):
 
-                if self._use_pyarrow_fs:
-                    with self._pafs.open_input_file(self._path) as f:
-                        pa_table = pf.read_table(f, **kwargs)
-
-                else:
-                    with self._fs.open(self._path) as f:
-                        pa_table = pf.read_table(f, **kwargs)
+            if self._use_pyarrow_fs:
+                with self._pafs.open_input_file(self._path) as f:
+                    pa_table = pf.read_table(f, **kwargs)
 
             else:
+                with self._fs.open(self._path) as f:
+                    pa_table = pf.read_table(f, **kwargs)
 
-                if not hasattr(self, "_dataset"):
-                    self.load_dataset()
+        else:
 
-                pa_table = self._dataset.to_table(**kwargs)
+            if not hasattr(self, "_dataset"):
+                self.load_dataset()
+
+            pa_table = self._dataset.to_table(**kwargs)
 
             return pa_table
 
-        else:
-            raise FileNotFoundError(f"{self._path} not found.")
+        # else:
+        #    raise FileNotFoundError(f"{self._path} not found.")
 
     def _load_parquet(self, **kwargs):
-        if self._fs.exists(self._path):
+        # if self._fs.exists(self._path):
 
-            use_pyarrow = False
-            if hasattr(self, "_schema"):
-                if self._schema and not self._schemas_equal:
-                    use_pyarrow = True
+        use_pyarrow = False
+        if hasattr(self, "_schema"):
+            if self._schema and not self._schemas_equal:
+                use_pyarrow = True
 
-            if self._fs.isfile(self._path):
+        if self._fs.isfile(self._path):
 
-                if self._use_pyarrow_fs:
-                    with self._pafs.open_input_file(self._path) as f:
-                        if use_pyarrow:
-                            pa_table = pl.read_parquet(
-                                source=f,
-                                use_pyarrow=True,
-                                pyarrow_options=dict(schema=self._schema),
-                                **kwargs,
-                            ).to_arrow()
-                        else:
-                            pa_table = pl.read_parquet(source=f, **kwargs).to_arrow()
-
-                else:
-                    with self._fs.open(self._path) as f:
-                        if use_pyarrow:
-                            pa_table = pl.read_parquet(
-                                source=f,
-                                use_pyarrow=True,
-                                pyarrow_options=dict(schema=self._schema),
-                                **kwargs,
-                            ).to_arrow()
-                        else:
-                            pa_table = pl.read_parquet(source=f, **kwargs).to_arrow()
+            if self._use_pyarrow_fs:
+                with self._pafs.open_input_file(self._path) as f:
+                    if use_pyarrow:
+                        pa_table = pl.read_parquet(
+                            source=f,
+                            use_pyarrow=True,
+                            pyarrow_options=dict(schema=self._schema),
+                            **kwargs,
+                        ).to_arrow()
+                    else:
+                        pa_table = pl.read_parquet(source=f, **kwargs).to_arrow()
 
             else:
-                try:
-                    pa_table = pq.read_table(
-                        self._path,
-                        partitioning=self._partitioning,
-                        filesystem=self._pafs if self._use_pyarrow_fs else self._fs,
-                        **kwargs,
-                    )
-                except pa.ArrowInvalid:
-                    self.set_pyarrow_schema()
-                    pa_table = pq.read_table(
-                        self._path,
-                        partitioning=self._partitioning,
-                        filesystem=self._pafs if self._use_pyarrow_fs else self._fs,
-                        schema=self._schema,
-                        **kwargs,
-                    )
+                with self._fs.open(self._path) as f:
+                    if use_pyarrow:
+                        pa_table = pl.read_parquet(
+                            source=f,
+                            use_pyarrow=True,
+                            pyarrow_options=dict(schema=self._schema),
+                            **kwargs,
+                        ).to_arrow()
+                    else:
+                        pa_table = pl.read_parquet(source=f, **kwargs).to_arrow()
+
+        else:
+            try:
+                pa_table = pq.read_table(
+                    self._path,
+                    partitioning=self._partitioning,
+                    filesystem=self._pafs if self._use_pyarrow_fs else self._fs,
+                    **kwargs,
+                )
+            except pa.ArrowInvalid:
+                self.set_pyarrow_schema()
+                pa_table = pq.read_table(
+                    self._path,
+                    partitioning=self._partitioning,
+                    filesystem=self._pafs if self._use_pyarrow_fs else self._fs,
+                    schema=self._schema,
+                    **kwargs,
+                )
 
             return pa_table
 
-        else:
-            raise FileNotFoundError(f"{self._path} not found.")
+        # else:
+        #     raise FileNotFoundError(f"{self._path} not found.")
 
     def _load_csv(self, **kwargs):
-        if self._fs.exists(self._path):
-            if self._fs.isfile(self._path):
+        # if self._fs.exists(self._path):
+        if self._fs.isfile(self._path):
 
-                if self._use_pyarrow_fs:
-                    with self._pafs.open_input_file(self._path) as f:
-                        pa_table = pl.read_csv(f).to_arrow()
-
-                else:
-                    with self._fs.open(self._path) as f:
-                        pa_table = pl.read_csv(f).to_arrow()
+            if self._use_pyarrow_fs:
+                with self._pafs.open_input_file(self._path) as f:
+                    pa_table = pl.read_csv(f).to_arrow()
 
             else:
-
-                if not hasattr(self, "_dataset"):
-                    self.load_dataset()
-                pa_table = self._dataset.to_table(**kwargs)
-
-            return pa_table
+                with self._fs.open(self._path) as f:
+                    pa_table = pl.read_csv(f).to_arrow()
 
         else:
-            raise FileNotFoundError(f"{self._path} not found.")
+
+            if not hasattr(self, "_dataset"):
+                self.load_dataset()
+            pa_table = self._dataset.to_table(**kwargs)
+
+        return pa_table
+
+        # else:
+        # raise FileNotFoundError(f"{self._path} not found.")
 
     def _get_dataset(self, schema: pa.Schema | None = None, **kwargs):
         if self._fs.exists(self._path):
@@ -221,28 +221,31 @@ class Reader(BaseDataSet):
             return dataset
 
         else:
-            raise FileNotFoundError(f"{self._path} not found.")
+            raise IOError(f"Can not find {self._path}. No such file or directory.")
 
     @log_decorator()
     def load_dataset(
         self, name: str = "dataset", schema: pa.Schema | None = None, **kwargs
     ):
-        if self._caching and not self.cached:
-            self._to_cache()
+        if self._fs.exists(self._path):
+            if self._caching and not self.is_cached:
+                self._to_cache()
 
-        if schema:  # is not None:
-            self._schema = schema
-            self._schemas_equal = True
+            if schema:  # is not None:
+                self._schema = schema
+                self._schemas_equal = True
+            else:
+                self.set_pyarrow_schema()
+
+            name = self._gen_name(name=name)
+
+            self._dataset = self._get_dataset(schema=self._schema, **kwargs)
+
+            # self._dataset = name
+            self._tables["dataset"] = name
+            self.ddb.register(name, self._dataset)
         else:
-            self.set_pyarrow_schema()
-
-        name = self._gen_name(name=name)
-
-        self._dataset = self._get_dataset(schema=self._schema, **kwargs)
-
-        # self._dataset = name
-        self._tables["dataset"] = name
-        self.ddb.register(name, self._dataset)
+            raise IOError(f"Can not find {self._path}. No such file or directory.")
 
     @log_decorator()
     def load_pa_table(
@@ -250,37 +253,40 @@ class Reader(BaseDataSet):
         name: str = "pa_table",
         **kwargs,
     ):
-        if self._caching and not self.cached:
-            self._to_cache()
+        if self._fs.exists(self._path):
+            if self._caching and not self.is_cached:
+                self._to_cache()
 
-        name = self._gen_name(name=name)
+            name = self._gen_name(name=name)
 
-        if self._format == "parquet":
-            self._pa_table = self._load_parquet(**kwargs)
+            if self._format == "parquet":
+                self._pa_table = self._load_parquet(**kwargs)
 
-        elif (
-            self._format == "feather"
-            or self._format == "ipc"
-            or self._format == "arrow"
-        ):
-            self._pa_table = self._load_feather(**kwargs)
+            elif (
+                self._format == "feather"
+                or self._format == "ipc"
+                or self._format == "arrow"
+            ):
+                self._pa_table = self._load_feather(**kwargs)
 
-        elif self._format == "csv":
-            self._pa_table = self._load_csv(**kwargs)
+            elif self._format == "csv":
+                self._pa_table = self._load_csv(**kwargs)
 
-        self._pa_table = self._drop_sort_distinct(table=self._pa_table)
+            self._pa_table = self._drop_sort_distinct(table=self._pa_table)
 
-        self._tables["pa_table"] = name
-        self.ddb.register(name, self._pa_table)
+            self._tables["pa_table"] = name
+            self.ddb.register(name, self._pa_table)
 
-        return self._pa_table
+            return self._pa_table
+        else:
+            raise IOError(f"Can not find {self._path}. No such file or directory.")
 
     def _create_ddb_table(
         self,
         name: str,
         temp: bool = True,
     ):
-        if self._caching and not self.cached:
+        if self._caching and not self.is_cached:
             self._to_cache()
         if temp:
 
@@ -332,15 +338,15 @@ class Reader(BaseDataSet):
         self._create_ddb_table(name=name, temp=False)
 
     @log_decorator()
-    def set_existing_ddb_table(self, existing_table:str):
-        self._tables["table_"] = existing_table
-
+    def set_existing_ddb_table(self, existing_table: str):
+        if existing_table in self.ddb.execute("SHOW TABLES")["name"].tolist():
+            self._tables["table_"] = existing_table
 
     @log_decorator()
     def to_relation(
         self,
     ):
-        if self._caching and not self.cached:
+        if self._caching and not self.is_cached:
             self._to_cache()
 
         elif self.has_table_:
@@ -374,7 +380,7 @@ class Reader(BaseDataSet):
     def to_polars(
         self,
     ):
-        if self._caching and not self.cached:
+        if self._caching and not self.is_cached:
             self._to_cache()
 
         if self.has_table_:
@@ -402,9 +408,7 @@ class Reader(BaseDataSet):
         else:
             if not self.has_dataset:
                 self.load_dataset()
-            self._pl_dataframe = to_polars(
-                self._drop_sort_distinct(table=self.dataset)
-            )
+            self._pl_dataframe = to_polars(self._drop_sort_distinct(table=self.dataset))
 
         return self._pl_dataframe
 
@@ -412,7 +416,7 @@ class Reader(BaseDataSet):
     def to_pandas(
         self,
     ):
-        if self._caching and not self.cached:
+        if self._caching and not self.is_cached:
             self._to_cache()
 
         if self.has_table_:
@@ -531,7 +535,7 @@ class Reader(BaseDataSet):
             return self._buffer_size
 
     @property
-    def cached(self) -> bool:
+    def is_cached(self) -> bool:
         return self._cached
 
     @property
