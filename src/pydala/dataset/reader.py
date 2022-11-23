@@ -68,12 +68,14 @@ class Reader(BaseDataSet):
         dataset = self._get_dataset(**kwargs)
         return get_unified_schema(dataset=dataset)
 
-    def set_pyarrow_schema(self, schema: dict | pa.Schema | None = None):
+    def set_pyarrow_schema(
+        self, schema: dict | pa.Schema | None = None, get_unified: bool = False
+    ):
         if schema:
             if isinstance(schema, dict):
                 schema = pyarrow_schema_from_dict(schema)
             self._schema = schema
-        else:
+        elif get_unified:
             self._schema, self._schemas_equal = self.get_pyarrow_schema()
 
     def _gen_name(self, name: str | None):
@@ -144,6 +146,9 @@ class Reader(BaseDataSet):
         if hasattr(self, "_schema"):
             if self._schema and not self._schemas_equal:
                 use_pyarrow = True
+
+        self.set_pyarrow_schema(schema)
+
         try:
             if self._fs.isfile(self._path):
 
@@ -183,7 +188,7 @@ class Reader(BaseDataSet):
             return pa_table
 
         except pa.ArrowInvalid:
-            self.set_pyarrow_schema(schema=schema)
+            self.set_pyarrow_schema(schema=schema, get_unified=True)
             return self._load_parquet(schema=schema, **kwargs)
 
         # else:
@@ -227,7 +232,7 @@ class Reader(BaseDataSet):
                 return dataset
 
             except pa.ArrowInvalid:
-                self.set_pyarrow_schema(schema=schema)
+                self.set_pyarrow_schema(schema=schema, get_unified=True)
                 return self._get_dataset(schema=schema, **kwargs)
 
         else:
@@ -242,6 +247,7 @@ class Reader(BaseDataSet):
             if self._caching and not self.is_cached:
                 self._to_cache()
 
+            # if schema:
             self.set_pyarrow_schema(schema=schema)
 
             name = self._gen_name(name=name)
@@ -259,6 +265,7 @@ class Reader(BaseDataSet):
     def load_pa_table(
         self,
         name: str = "pa_table",
+        schema: dict | pa.Schema | None = None,
         **kwargs,
     ):
         if self._fs.exists(self._path):
@@ -346,8 +353,8 @@ class Reader(BaseDataSet):
         self._create_ddb_table(name=name, temp=False)
 
     @log_decorator()
-    def set_existing_ddb_table(self, existing_table: str):
-        if existing_table in self.ddb.execute("SHOW TABLES")["name"].tolist():
+    def add_existing_ddb_table(self, existing_table: str):
+        if existing_table in self.ddb.execute("SHOW TABLES").df()["name"].tolist():
             self._tables["table_"] = existing_table
 
     @log_decorator()
@@ -582,7 +589,7 @@ class TimeFlyReader(Reader):
         fsspec_fs: spec.AbstractFileSystem | None = None,
         pyarrow_fs: FileSystem | None = None,
         use_pyarrow_fs: bool = False,
-        schema:dict|pa.Schema|None=None,
+        schema: dict | pa.Schema | None = None,
     ) -> None:
         self._base_path = base_path
         self.timefly = TimeFly(
@@ -620,15 +627,15 @@ class TimeFlyReader(Reader):
             fsspec_fs=fsspec_fs,
             pyarrow_fs=pyarrow_fs,
             use_pyarrow_fs=use_pyarrow_fs,
-            schema=schema
+            schema=schema,
         )
-        
-        schema = self.timefly.config["current"].get("schema",None)
-        if schema=="None":
-            schema = None
-            
-        if schema:
-            self.set_pyarrow_schema(schema=schema)
+        if "current" in self.timefly._config:
+            schema = self.timefly._config["current"].get("schema", None)
+            if schema == "None":
+                schema = None
+
+        # if schema:
+        self.set_pyarrow_schema(schema=schema)
 
     def set_snapshot(self, snapshot):
         self._snapshot_path = self.timefly._find_snapshot_subpath(snapshot)

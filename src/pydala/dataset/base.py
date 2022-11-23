@@ -108,7 +108,7 @@ class BaseDataSet(BaseFileSystem):
 
         return self
 
-    def drop(self, columns: str | list | None = "__index_level_0__"):
+    def drop(self, columns: str | list | None = None):
         self._drop = columns
 
         self.logger.info(self._drop)
@@ -125,11 +125,15 @@ class BaseDataSet(BaseFileSystem):
         | ds.FileSystemDataset,
     ):
         if self._drop:
+            print("drop")
             table = drop_columns(table=table, columns=self._drop)
+
         if self._distinct:
+            print("distinct")
             table = distinct_table(table=table, ddb=self.ddb, **self._distinct_params)
 
         if self._sort_by:
+            print("sort")
             table = sort_table(
                 table=table, sort_by=self._sort_by, ascending=self._ascending
             )

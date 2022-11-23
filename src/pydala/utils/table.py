@@ -323,11 +323,11 @@ def drop_columns(
                 return table.drop(columns=columns)
             return table
 
-        elif isinstance(table, pa._dataset.Dataset):
-            columns = [col for col in table.schema.names if col not in columns]
-            if len(columns) > 0:
-                return table.to_table(columns=columns)
-            return table.to_table()
+        # elif isinstance(table, pa._dataset.Dataset):
+        #     columns = [col for col in table.schema.names if col not in columns]
+        #     if len(columns) > 0:
+        #         return table.to_table(columns=columns)
+        #     return table.to_table()
 
         elif isinstance(table, duckdb.DuckDBPyRelation):
             columns = [
@@ -337,6 +337,8 @@ def drop_columns(
             ]
             if len(columns) > 0:
                 return table.project(",".join(columns))
+            return table
+        else:
             return table
     else:
         return table

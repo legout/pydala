@@ -50,7 +50,10 @@ class Repartition:
 
         # Create cache
         if self._caching_method == "local":
-            self._reader._to_cache()
+            if self._reader._protocol=="file":
+                self._caching_method == "temp_table"
+            else:
+                self._reader._to_cache()
 
         elif self._caching_method == "temp_table":
             self._source_table = "temp_table"

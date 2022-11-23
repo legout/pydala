@@ -207,7 +207,7 @@ class TimeFly(BaseFileSystem):
             }
 
             if "current" in self._config:
-                self._config["current"].update(currentt)
+                self._config["current"].update(current)
             else:
                 self._config["current"] = current
 
