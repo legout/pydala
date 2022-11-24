@@ -13,6 +13,7 @@ from fsspec import spec
 from pyarrow.fs import FileSystem
 
 from ..utils.base import random_id
+from ..utils.dataset import get_unified_schema, list_schemas, sort_schema
 from ..utils.logging import log_decorator
 from ..utils.table import get_tables_diff, to_relation
 from .base import BaseDataSet
@@ -28,6 +29,7 @@ class Writer(BaseDataSet):
         partitioning: list | str | None = None,
         partitioning_flavor: str | None = None,
         format: str = "parquet",
+        schema: dict | pa.Schema | None = None,
         compression: str = "zstd",
         mode: str | None = "delta",  # can be 'delta', 'append', 'overwrite', 'raise'
         ddb: duckdb.DuckDBPyConnection | None = None,
@@ -76,6 +78,8 @@ class Writer(BaseDataSet):
         self.mode(value=mode)
 
         self._base_name = base_name
+
+        self._schema = schema
 
     def partitioning(
         self, columns: str | list | None = None, flavor: str | None = None
@@ -160,6 +164,25 @@ class Writer(BaseDataSet):
         return zip(filters, all_partitions)
 
     # @log_decorator(show_arguments=False)
+
+    def _set_reader(self, base_path: str):
+        if not hasattr(self, "_reader"):
+            self._reader = {}
+        if not base_path in self._reader:
+            if self._fs.exists(base_path):
+                self._reader[base_path] = Reader(
+                    path=base_path,
+                    format=self._format,
+                    ddb=self.ddb,
+                    fsspec_fs=self._fs,
+                    pyarrow_fs=self._pafs,
+                    use_pyarrow_fs=self._use_pyarrow_fs,
+                )
+                get_unified = False if self._schema else True
+                self._reader[base_path].set_pyarrow_schema(
+                    schema=self._schema, get_unified=get_unified
+                )
+
     def _handle_write_mode(
         self,
         table: duckdb.DuckDBPyRelation,
@@ -189,45 +212,47 @@ class Writer(BaseDataSet):
             elif self._mode == "overwrite":
                 if self._fs.exists(path):
                     self._fs.rm(path, recursive=True)
-                    self._mode = "delta"
+                self._mode = "delta"
                 return table
 
             elif self._mode == "append":
                 return table
 
             elif self._mode == "delta":
+                self._set_reader(base_path=path)
+                if not path in self._reader:
+                    return table
 
-                existing_table = Reader(
-                    path=path,
-                    format=self._format,
-                    ddb=self.ddb,
-                    fsspec_fs=self._fs,
-                    pyarrow_fs=self._pafs,
-                    use_pyarrow_fs=self._use_pyarrow_fs,
+                self._reader[path].load_dataset()
+
+                table1 = (
+                    table.filter(
+                        f"{datetime_column}>='{start_time}' AND {datetime_column}<'{end_time}'"
+                    )
+                    if datetime_column  # is not None
+                    else table
+                )
+
+                table2 = (
+                    self._reader[path].rel.filter(
+                        f"{datetime_column}>='{start_time}' AND {datetime_column}<'{end_time}'"
+                    )
+                    if datetime_column  # is not None
+                    else self._reader[path].rel
                 )
 
                 tables_diff = get_tables_diff(
-                    table1=table.filter(
-                        f"{datetime_column}>='{start_time}' AND {datetime_column}<'{end_time}'"
-                    )
-                    if datetime_column  # is not None
-                    else table,
-                    table2=existing_table.rel.filter(
-                        f"{datetime_column}>='{start_time}' AND {datetime_column}<'{end_time}'"
-                    )
-                    if datetime_column  # is not None
-                    else existing_table.rel,
+                    table1=table1,
+                    table2=table2,
                     subset=delta_subset,
                     ddb=self.ddb,
                 )
-
-                del existing_table
 
                 return tables_diff
 
             else:
                 raise ValueError(
-                    "Value for mode must be 'overwrite', 'raise' or 'append'."
+                    "Value for mode must be 'overwrite', 'raise', 'delta' or 'append'."
                 )
 
         return table
@@ -247,7 +272,17 @@ class Writer(BaseDataSet):
             range_max = table.shape[0] // batch_size
             if range_max != table.shape[0] / batch_size:
                 range_max += 1
-            for i in progressbar.progressbar(range(0, range_max)):
+            # for i in progressbar.progressbar(range(0, range_max)):
+            self.logger.info(f"Total number of batches: {range_max}")
+            for i in range(0, range_max):
+
+                logging_trigger = i % (range_max // 10) if range_max >= 10 else i % 1
+                if logging_trigger:
+
+                    self.logger.info(
+                        f"Processed batches: {i}/{range_max} - {i/range_max*100:.1f} %."
+                    )
+
                 table_ = table.limit(batch_size, offset=i * batch_size)
                 table_ = self._handle_write_mode(
                     table=table_,
@@ -255,6 +290,7 @@ class Writer(BaseDataSet):
                     delta_subset=delta_subset,
                     datetime_column=datetime_column,
                 )
+
                 yield table_
 
         elif isinstance(batch_size, str):
@@ -306,7 +342,7 @@ class Writer(BaseDataSet):
             if not end_time:
                 end_time = table.max(datetime_column).fetchone()[0]
 
-            print(start_time, end_time, interval)
+            # print(start_time, end_time, interval)
             timestamps = (
                 self.ddb.query(
                     f"""SELECT * FROM generate_series(
@@ -317,9 +353,28 @@ class Writer(BaseDataSet):
                 .to_pylist()
             )
 
-            for sd, ed in progressbar.progressbar(
-                list(zip(timestamps[:-1], timestamps[1:]))
-            ):
+            num_timestamps = len(timestamps) - 1
+            # for sd, ed in progressbar.progressbar(
+            #    list(zip(timestamps[:-1], timestamps[1:]))
+            # ):
+            i = 0
+            self.logger.info(
+                f"Total number of batches: {num_timestamps}. Time range: {timestamps[0]} - {timestamps[-1]}."
+            )
+            for sd, ed in list(zip(timestamps[:-1], timestamps[1:])):
+
+                logging_trigger = (
+                    i % (num_timestamps // 10) if num_timestamps >= 10 else i % 1
+                )
+                if logging_trigger == 0:
+
+                    self.logger.info(
+                        f"Processed batches: {i}/{num_timestamps} - {i/num_timestamps*100:.1f} %."
+                    )
+                    self.logger.info(
+                        f"Processed time range: {timestamps[0]} - {timestamps[i+1]}"
+                    )
+
                 filter = f"{datetime_column} >= TIMESTAMP '{sd}' AND {datetime_column} < TIMESTAMP '{ed}'"
 
                 table_ = table.filter(filter)
@@ -331,6 +386,7 @@ class Writer(BaseDataSet):
                     start_time=sd,
                     end_time=ed,
                 )
+                i += 1
                 yield table_
 
         else:
@@ -366,6 +422,7 @@ class Writer(BaseDataSet):
                         pl.from_arrow(table).write_csv(file=f, **kwargs)
 
             else:
+
                 pq.write_table(
                     table,
                     path,
@@ -407,6 +464,7 @@ class Writer(BaseDataSet):
                 self._table.shape[0], 1024**2 * 64 // self._table.shape[1]
             )
         self._batch_size = batch_size
+        self._row_group_size = row_group_size
 
         if self._partitioning:  # is not None:
             filters = self._get_partition_filters()
@@ -475,6 +533,27 @@ class Writer(BaseDataSet):
                         **kwargs,
                     )
 
+    def unify_schema(self):
+
+        if self._format == "parquet" and self._protocol != "file":
+            self._fs.invalidate_cache()
+            self._set_reader(base_path=self._base_path)
+            self._reader[self._base_path].load_dataset()
+            schemas = list_schemas(path=self._base_path, filesystem=self._fs)
+            schema, schema_equal = get_unified_schema(schemas)
+
+            if not schema_equal:
+                for n, schema_ in enumerate(schemas):
+                    if sort_schema(schema_) != sort_schema(schema):
+                        self.write_table(
+                            pq.read_table(
+                                self._reader[self._base_path].dataset.files[n],
+                                schema=schema,
+                            ),
+                            self._reader[self._base_path].dataset.files[n],
+                            row_group_size=self._row_group_size,
+                        )
+
 
 class TimeFlyWriter(Writer):
     def __init__(
@@ -488,7 +567,7 @@ class TimeFlyWriter(Writer):
         compression: str = "zstd",
         mode: str | None = "delta",  # can be 'delta', 'append', 'overwrite', 'raise'
         ddb: duckdb.DuckDBPyConnection | None = None,
-        cache_storage: str | None = "/tmp/pydala/",
+        ddb_memory_limit: str = "-1",
         protocol: str | None = None,
         profile: str | None = None,
         endpoint_url: str | None = None,
@@ -519,6 +598,8 @@ class TimeFlyWriter(Writer):
             self._timefly = None
 
         self._snapshot_path = self.timefly._find_snapshot_subpath(timefly=self._timefly)
+        if "current" in self.timefly._config:
+            schema = self.timefly._config["current"]["schema"]
 
         super().__init__(
             base_path=os.path.join(base_path, self._snapshot_path),
@@ -526,10 +607,11 @@ class TimeFlyWriter(Writer):
             partitioning=partitioning,
             partitioning_flavor=partitioning_flavor,
             format=format,
+            schema=schema,
             compression=compression,
             mode=mode,
             ddb=ddb,
-            cache_storage=cache_storage,
+            ddb_memory_limit=ddb_memory_limit,
             protocol=protocol,
             profile=profile,
             endpoint_url=endpoint_url,
@@ -544,7 +626,7 @@ class TimeFlyWriter(Writer):
         self._snapshot_path = self.timefly._find_snapshot_subpath(snapshot)
         self._base_path = os.path.join(self.timefly._path, self._snapshot_path)
 
-    def wrire_dataset(
+    def write_dataset(
         self,
         table: duckdb.DuckDBPyRelation
         | pa.Table
@@ -560,6 +642,7 @@ class TimeFlyWriter(Writer):
         delta_subset: list | None = None,
         transform_func: object | None = None,
         transform_func_kwargs: dict | None = None,
+        schema: pa.Schema | None = None,
         **kwargs,
     ):
         super().write_dataset(
@@ -575,13 +658,13 @@ class TimeFlyWriter(Writer):
             **kwargs,
         )
 
-        self.timefly.set_current(
+        self.timefly.update_current(
             format=self._format,
             compression=self._compression,
             partitioning=self._partitioning,
             sort_by=self._sort_by,
             ascending=self._ascending,
             distinct=self._distinct,
-            columns=self._table.columns,
+            schema=schema,
             batch_size=self._batch_size,
         )

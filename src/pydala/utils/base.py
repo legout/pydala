@@ -124,7 +124,10 @@ def write_toml(
 ) -> None:
 
     if not filesystem.exists(path):
-        filesystem.mkdirs(path=os.path.dirname(path), exist_ok=True)
+        try:
+            filesystem.mkdirs(path=os.path.dirname(path), exist_ok=True)
+        except PermissionError:
+            pass
 
     with filesystem.open(path, "w") as f:
         rtoml.dump(

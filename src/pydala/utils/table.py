@@ -165,7 +165,6 @@ def get_tables_diff(
     table2_ = to_relation(table2, ddb=ddb)
 
     if subset:
-        print(subset)
         if cast_as_str:
             subset_types = table1_.project(",".join(subset)).types
             subset_table1_ = table1_.project(

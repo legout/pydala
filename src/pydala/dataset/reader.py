@@ -82,13 +82,13 @@ class Reader(BaseDataSet):
         return f"{self._name}_{name}" if self._name else name  # is not None else name
 
     def _to_cache(self):
-        if self._fs.fs.protocol != "file":
+        if self._protocol != "file":
             self._fs.invalidate_cache()
             recursive = False if self._fs.isfile(self._path) else True
 
             if hasattr(self._fs, "has_s5cmd"):
                 if self._fs.has_s5cmd and self._profile:  # is not None:
-                    self._fs.sync(
+                    self._fs.fs.sync(
                         "s3://" + os.path.join(self._bucket or "", self._path),
                         os.path.join(
                             self._cache_bucket,
@@ -364,7 +364,7 @@ class Reader(BaseDataSet):
         if self._caching and not self.is_cached:
             self._to_cache()
 
-        elif self.has_table_:
+        if self.has_table_:
             self._rel = self._drop_sort_distinct(
                 table=self.ddb.query(f"SELECT * FROM {self._tables['table_']}")
             )
@@ -580,6 +580,7 @@ class TimeFlyReader(Reader):
         partitioning: ds.Partitioning | list | str | None = None,
         format: str | None = "parquet",
         ddb: duckdb.DuckDBPyConnection | None = None,
+        ddb_memory_limit: str = "-1",
         caching: bool = False,
         cache_storage: str | None = "/tmp/pydala/",
         protocol: str | None = None,
@@ -600,6 +601,8 @@ class TimeFlyReader(Reader):
             profile=profile,
             endpoint_url=endpoint_url,
             storage_options=storage_options,
+            caching=caching,
+            cache_storage=cache_storage,
         )
         if timefly is not None:
             self._timefly = (
@@ -618,6 +621,7 @@ class TimeFlyReader(Reader):
             partitioning=partitioning,
             format=format,
             ddb=ddb,
+            ddb_memory_limit=ddb_memory_limit,
             caching=caching,
             cache_storage=cache_storage,
             protocol=protocol,
@@ -658,3 +662,8 @@ class TimeFlyReader(Reader):
         if self.has_temp_table:
             self.ddb.query(f"DROP TABLE {self._tables['temp_table']}")
             self.create_temp_table()
+
+    def _to_cache(self, *args, **kwargs):
+        super()._to_cache(*args, **kwargs)
+        self.timefly._cached = True
+        self.timefly._set_filesystem()

@@ -115,7 +115,7 @@ class BaseDataSet(BaseFileSystem):
 
         return self
 
-    @log_decorator(show_arguments=False)
+    # @log_decorator(show_arguments=False)
     def _drop_sort_distinct(
         self,
         table: duckdb.DuckDBPyRelation

@@ -22,6 +22,8 @@ class TimeFly(BaseFileSystem):
         profile: str | None = None,
         endpoint_url: str | None = None,
         storage_options: dict = {},
+        caching: bool = False,
+        cache_storage: str | None = "/tmp/pydala/",
         fsspec_fs: spec.AbstractFileSystem | None = None,
         pyarrow_fs: FileSystem | None = None,
         use_pyarrow_fs: bool = False,
@@ -33,8 +35,8 @@ class TimeFly(BaseFileSystem):
             path=path,
             bucket=bucket,
             name=None,
-            caching=False,
-            cache_storage=None,
+            caching=caching,
+            cache_storage=cache_storage,
             protocol=protocol,
             profile=profile,
             endpoint_url=endpoint_url,
@@ -146,14 +148,17 @@ class TimeFly(BaseFileSystem):
         }
 
         self._config["dataset"] = dataset
-        self._fs.makedirs(os.path.join(self._path, "current"), exist_ok=True)
-        self._fs.makedirs(os.path.join(self._path, "snapshot"), exist_ok=True)
+        try:
+            self._fs.makedirs(os.path.join(self._path, "current"), exist_ok=True)
+            self._fs.makedirs(os.path.join(self._path, "snapshot"), exist_ok=True)
+        except PermissionError:
+            pass
 
         if save:
             self.write_config()
 
     @log_decorator()
-    def set_current(
+    def create_current(
         self,
         format: str | None = None,
         compression: str | None = None,
@@ -204,6 +209,7 @@ class TimeFly(BaseFileSystem):
                 "schema_unique": schema_unique or None,
                 "batch_size": batch_size or None,
                 "comment": comment or "initialized",
+                "latest_update": self._now(),
             }
 
             if "current" in self._config:
@@ -212,6 +218,21 @@ class TimeFly(BaseFileSystem):
                 self._config["current"] = current
 
             self.write_config()
+
+    @log_decorator()
+    def update_current(self, **kwargs):
+        if not self.has_current:
+            self.create_current(**kwargs)
+        else:
+            if self.current_empty:
+                self.create_current(**kwargs)
+        if not "current" in self._config:
+            self.create_current(**kwargs)
+
+        kwargs["latest_update"] = self._now()
+
+        self._config["current"].update(kwargs)
+        self.write_config()
 
     @log_decorator()
     def update(self, snapshot: str | None = None, **kwargs) -> None:
@@ -386,8 +407,11 @@ class TimeFly(BaseFileSystem):
             files = self._fs.glob(os.path.join(path1, f"**.{format}"))
             path2 = path2.lstrip("/") + "/"
             # if not self._fs.exists(path2):
-            self._fs.makedirs(path2, exist_ok=True)
-            self._fs.mv(files, path2, recursive=True)
+            try:
+                self._fs.makedirs(path2, exist_ok=True)
+                self._fs.mv(files, path2, recursive=True)
+            except PermissionError:
+                pass
 
     def _cp(self, path1: str, path2: str, format: str) -> None:
         if (
@@ -413,8 +437,11 @@ class TimeFly(BaseFileSystem):
             files = self._fs.glob(os.path.join(path1, f"**.{format}"))
             path2 = path2.lstrip("/") + "/"
             # if not self._fs.exists(path2):
-            self._fs.makedirs(path2, exist_ok=True)
-            self._fs.cp(files, path2, recursive=True)
+            try:
+                self._fs.makedirs(path2, exist_ok=True)
+                self._fs.cp(files, path2, recursive=True)
+            except PermissionError:
+                pass
 
     def _rm(self, path: str) -> None:
         self._fs.rm(path, recursive=True)

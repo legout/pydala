@@ -130,6 +130,15 @@ def get_unified_schema(
     return schema, schemas_equal
 
 
+def sort_schema(schema):
+    return pa.schema(
+        [
+            pa.field(name, type_)
+            for name, type_ in sorted(zip(schema.names, schema.types))
+        ]
+    )
+
+
 def pyarrow_schema_to_dict(schema: pa.Schema):
     return dict(zip(schema.names, map(_pyarrow_datatype_to_str, schema.types)))
 
