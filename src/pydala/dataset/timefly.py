@@ -231,6 +231,11 @@ class TimeFly(BaseFileSystem):
 
         kwargs["latest_update"] = self._now()
 
+        schema = kwargs.pop("schema", None)
+        if schema:
+            schema = pyarrow_schema_to_dict(schema)
+            self._config["current"].update(dict(schema=schema))
+
         self._config["current"].update(kwargs)
         self.write_config()
 

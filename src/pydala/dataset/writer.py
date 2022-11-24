@@ -178,9 +178,10 @@ class Writer(BaseDataSet):
                     pyarrow_fs=self._pafs,
                     use_pyarrow_fs=self._use_pyarrow_fs,
                 )
-                get_unified = False if self._schema else True
+                schema = self._schema or self._reader[base_path]._schema
+                get_unified = False if schema else True
                 self._reader[base_path].set_pyarrow_schema(
-                    schema=self._schema, get_unified=get_unified
+                    schema=schema, get_unified=get_unified
                 )
 
     def _handle_write_mode(
@@ -234,11 +235,11 @@ class Writer(BaseDataSet):
                 )
 
                 table2 = (
-                    self._reader[path].rel.filter(
+                    self.ddb.from_arrow(self._reader[path]._get_dataset()).filter(
                         f"{datetime_column}>='{start_time}' AND {datetime_column}<'{end_time}'"
                     )
                     if datetime_column  # is not None
-                    else self._reader[path].rel
+                    else self.ddb.from_arrow(self._reader[path]._get_dataset())
                 )
 
                 tables_diff = get_tables_diff(
@@ -549,9 +550,12 @@ class Writer(BaseDataSet):
                             pq.read_table(
                                 self._reader[self._base_path].dataset.files[n],
                                 schema=schema,
+                                filesystem=self._fs,
                             ),
                             self._reader[self._base_path].dataset.files[n],
-                            row_group_size=self._row_group_size,
+                            row_group_size=self._row_group_size
+                            if hasattr(self, "_row_group_size")
+                            else None,
                         )
 
 
@@ -564,6 +568,7 @@ class TimeFlyWriter(Writer):
         partitioning: list | str | None = None,
         partitioning_flavor: str | None = None,
         format: str = "parquet",
+        schema: pa.Schema | None = None,
         compression: str = "zstd",
         mode: str | None = "delta",  # can be 'delta', 'append', 'overwrite', 'raise'
         ddb: duckdb.DuckDBPyConnection | None = None,

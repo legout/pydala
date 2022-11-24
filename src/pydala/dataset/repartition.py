@@ -53,7 +53,8 @@ class Repartition:
             if self._reader._protocol == "file":
                 self._caching_method == "temp_table"
             else:
-                self._reader._to_cache()
+                if not self._reader._cached:
+                    self._reader._to_cache()
 
         elif self._caching_method == "temp_table":
             self._source_table = "temp_table"
@@ -153,15 +154,17 @@ class Repartition:
 
         return self
 
-    def schema(self, schema: pa.Schema | None = None):
-        if schema is not None:
-            self._schema = schema
-        return self
+    # def schema(self, schema: pa.Schema | None = None):
+    #     if schema is not None:
+    #         self._schema = schema
+    #     return self
 
     def write(
         self,
         batch_size: str | int | None = None,
-        row_group_size: int | None = 250000,
+        row_group_size: int | None = 100000,
+        start_time: str | None = None,
+        end_time: str | None = None,
         sort_by: str | None = None,
         ascending: bool | None = None,
         distinct: bool | None = None,
@@ -170,10 +173,12 @@ class Repartition:
         partitioning_flavor: str | None = None,
         compression: str | None = None,
         format: str | None = None,
-        schema: pa.Schema | None = None,
         mode: str | None = None,
         delete_source: bool = False,
         datetime_column: str | None = None,
+        transform_func: object | None = None,
+        transform_func_kwargs: dict | None = None,
+        **kwargs,
     ):
         self.sort(by=sort_by, ascending=ascending)
         self.distinct(value=distinct)
@@ -181,15 +186,20 @@ class Repartition:
         self.partitioning(columns=partitioning, flavor=partitioning_flavor)
         self.compression(value=compression)
         self.format(value=format)
-        self.schema(schema=schema)
+        # self.schema(schema=schema)
         self.mode(value=mode)
         self.batch_size(value=batch_size)
         self.row_group_size(value=row_group_size)
         self._writer.write_dataset(
             table=self._source,
             batch_size=self._batch_size,
+            start_time=start_time,
+            end_time=end_time,
             row_group_size=self._row_group_size,
             datetime_column=datetime_column,
+            transform_func=transform_func,
+            transform_func_kwargs=transform_func_kwargs,
+            **kwargs,
         )
         if delete_source:
             self._delete_source = delete_source

@@ -135,6 +135,9 @@ class BaseDataSet(BaseFileSystem):
         if self._sort_by:
             print("sort")
             table = sort_table(
-                table=table, sort_by=self._sort_by, ascending=self._ascending
+                table=table,
+                sort_by=self._sort_by,
+                ascending=self._ascending,
+                ddb=self.ddb,
             )
         return table

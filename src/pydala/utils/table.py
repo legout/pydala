@@ -133,6 +133,8 @@ def sort_table(
             return table.sort(by=sort_by, reverse=reverse)
 
         elif isinstance(table, duckdb.DuckDBPyRelation):
+            if not ddb:
+                ddb = duckdb.connect()
             return ddb.from_arrow(
                 to_polars(table).sort(by=sort_by, reverse=reverse).to_arrow()
             )
@@ -153,9 +155,9 @@ def get_tables_diff(
     | duckdb.DuckDBPyRelation
     | pa._dataset.Dataset
     | str,
+    ddb: duckdb.DuckDBPyConnection,
     subset: list | None = None,
     cast_as_str: bool = False,
-    ddb: duckdb.DuckDBPyConnection | None = None,
 ) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
 
     if not ddb:  # is None:
@@ -242,11 +244,11 @@ def distinct_table(
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
     | pa._dataset.Dataset,
+    ddb: duckdb.DuckDBPyConnection,
     subset: list | None = None,
     keep: str = "first",
     presort_by: str | list | None = None,
     postsort_by: str | list | None = None,
-    ddb: duckdb.DuckDBPyConnection | None = None,
 ) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
 
     if isinstance(table, (pa.Table, pd.DataFrame, pl.DataFrame, pa._dataset.Dataset)):

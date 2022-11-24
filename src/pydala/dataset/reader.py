@@ -75,6 +75,7 @@ class Reader(BaseDataSet):
             if isinstance(schema, dict):
                 schema = pyarrow_schema_from_dict(schema)
             self._schema = schema
+            self._schemas_equal = True
         elif get_unified:
             self._schema, self._schemas_equal = self.get_pyarrow_schema()
 
