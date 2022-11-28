@@ -52,7 +52,7 @@ fmt:              ## Format code using black & isort.
 	@$(POETRY) run black src/pydala
 	@$(POETRY) run black tests/
 
-.PHONY: lint
+.PHONY: lint 
 lint:             ## Run pep8, black, mypy linters.
 	@$(POETRY) run flake8 src/pydala
 	@$(POETRY) run black --check src/pydala
