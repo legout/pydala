@@ -373,10 +373,12 @@ class TimeFly(BaseFileSystem):
                 "sort_by": self._config["snapshot"][snapshot]["sort_by"],
                 "ascending": self._config["snapshot"][snapshot]["ascending"],
                 "distinct": self._config["snapshot"][snapshot]["distinct"],
-                "columns": self._config["snapshot"][snapshot]["columns"],
+                "schema": self._config["snapshot"][snapshot]["schema"],
+                "schema_unique": self._config["snapshot"][snapshot]["schema_unique"],
                 "batch_size": self._config["snapshot"][snapshot]["batch_size"],
                 "comment": f"Restored from snapshot {snapshot}",
             }
+
             self._config["current"] = current
             self._cp(
                 snapshot_path,

@@ -9,15 +9,16 @@ packages = [{include = "pydala", from = "src"}]
 [tool.poetry.dependencies]
 python = "^3.10"
 # pathlib = "^1.0.1" # pathlib is a python core module since version 3.4
-polars = "^0.14.28"
+polars = "^0.15.1"
 pyarrow = "^10.0.0"
 duckdb = "^0.6.0"
 s3fs = "^2022.11.0"
 fsspec = "^2022.11.0"
-pandas = "^1.5.1"
+pandas = "^1.5.2"
 progressbar2 = "^4.2.0"
 rtoml = "^0.9.0"
 typer = "^0.7.0"
+numpy = "^1.23.5"
 
 [tool.poetry.dev-dependencies]
 pytest = "*"

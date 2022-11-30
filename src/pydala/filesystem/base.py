@@ -25,14 +25,14 @@ class BaseFileSystem:
         fsspec_fs: spec.AbstractFileSystem | None = None,
         pyarrow_fs: FileSystem | None = None,
         use_pyarrow_fs: bool = False,
-        #logging:bool=True,
+        # logging:bool=True,
         log_file: str | None = None,
         log_sub_dir: str | None = None,
     ):
 
         self._log_file = log_file
         self._log_sub_dir = log_sub_dir
-        
+
         self.logger = get_logger(
             name=repr(self.__class__).split("'")[1],
             log_file=log_file,
