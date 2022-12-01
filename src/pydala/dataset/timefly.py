@@ -309,7 +309,7 @@ class TimeFly(BaseFileSystem):
 
         else:
             raise FileNotFoundError(
-                f"Can not add snapshot '{snapshot}'. No files found in {os.path.join(self._path, 'current')}."
+                f"Can not add snapshot '{now}'. No files found in {os.path.join(self._path, 'current')}."
             )
 
     @log_decorator()
@@ -413,12 +413,13 @@ class TimeFly(BaseFileSystem):
         else:
             files = self._fs.glob(os.path.join(path1, f"**.{format}"))
             path2 = path2.lstrip("/") + "/"
-            # if not self._fs.exists(path2):
+
             try:
                 self._fs.makedirs(path2, exist_ok=True)
-                self._fs.mv(files, path2, recursive=True)
             except PermissionError:
                 pass
+
+            self._fs.mv(files, path2, recursive=True)
 
     def _cp(self, path1: str, path2: str, format: str) -> None:
         if (
@@ -443,12 +444,14 @@ class TimeFly(BaseFileSystem):
         else:
             files = self._fs.glob(os.path.join(path1, f"**.{format}"))
             path2 = path2.lstrip("/") + "/"
-            # if not self._fs.exists(path2):
+
             try:
                 self._fs.makedirs(path2, exist_ok=True)
-                self._fs.cp(files, path2, recursive=True)
+
             except PermissionError:
                 pass
+
+            self._fs.cp(files, path2, recursive=True)
 
     def _rm(self, path: str) -> None:
         self._fs.rm(path, recursive=True)
