@@ -497,13 +497,14 @@ class Writer(BaseDataSet):
                                 transform_func(table_, **transform_func_kwargs),
                                 ddb=self.ddb,
                             )
-
-                        self.write_table(
-                            table=table_.arrow(),
-                            path=self._gen_path(partition_names=partition_names),
-                            row_group_size=row_group_size,
-                            **kwargs,
-                        )
+                            
+                        if table_.shape[0]>0:
+                            self.write_table(
+                                table=table_.arrow(),
+                                path=self._gen_path(partition_names=partition_names),
+                                row_group_size=row_group_size,
+                                **kwargs,
+                            )
 
         else:
             # check if base_path for partition is empty and act depending on mode and distinct.
@@ -526,13 +527,13 @@ class Writer(BaseDataSet):
                             transform_func(table_, **transform_func_kwargs),
                             ddb=self.ddb,
                         )
-
-                    self.write_table(
-                        table=table_.arrow(),
-                        path=self._gen_path(partition_names=None),
-                        row_group_size=row_group_size,
-                        **kwargs,
-                    )
+                    if table_.shape[0]>0:
+                        self.write_table(
+                            table=table_.arrow(),
+                            path=self._gen_path(partition_names=None),
+                            row_group_size=row_group_size,
+                            **kwargs,
+                        )
 
     def unify_schema(self):
 
