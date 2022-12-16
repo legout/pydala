@@ -359,12 +359,13 @@ class Reader(BaseDataSet):
     def create_temp_table(
         self,
         name: str = "temp_table",
+        update:bool=False
     ):
-        self._create_ddb_table(name=name, temp=True)
+        self._create_ddb_table(name=name, temp=True, update=update)
 
     @log_decorator()
-    def create_table(self, name: str = "table_"):
-        self._create_ddb_table(name=name, temp=False)
+    def create_table(self, name: str = "table_", update:bool=False):
+        self._create_ddb_table(name=name, temp=False, update=update)
 
     @log_decorator()
     def add_existing_ddb_table(self, existing_table: str):
