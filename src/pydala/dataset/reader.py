@@ -301,28 +301,28 @@ class Reader(BaseDataSet):
         self,
         name: str,
         temp: bool = True,
-        update:bool=False,
+        update: bool = False,
     ):
         if self._caching and not self.is_cached:
             self._to_cache()
-            
+
         name = self._gen_name(name=name)
-        
+
         if update:
             if name not in self._tables:
-                update = False  
-        
+                update = False
+
         if not update:
             if temp:
-                self.ddb.execute(f"CREATE OR REPLACE TEMP TABLE {name}")
+                sql = f"CREATE OR REPLACE TEMP TABLE {name} AS SELECT * FROM "
                 self._tables["temp_table"] = name
             else:
-                self.ddb.execute(f"CREATE OR REPLACE TABLE {name}")
+                sql = f"CREATE OR REPLACE TABLE {name} AS SELECT *FROM "
                 self._tables["table_"] = name
-        
-            
-        sql = f"INSERT INTO {name} SELECT FROM "
-        
+
+        else:
+            sql = f"INSERT INTO {name} SELECT * FROM "
+
         if self.has_pa_table:
             sql += f"{self._tables['pa_table']}"
             columns = self.pa_table.column_names
@@ -340,7 +340,7 @@ class Reader(BaseDataSet):
 
         if update:
             sql += f" EXPECT SELECT * FROM {name}"
-            
+
         if self._drop:  # is not None:
             if isinstance(self._drop, str):
                 self._drop = [self._drop]
@@ -351,20 +351,15 @@ class Reader(BaseDataSet):
 
         if self._distinct:
             sql = sql.replace("SELECT *", "SELECT DISTINCT *")
-            
 
         self.ddb.execute(sql)
 
     @log_decorator()
-    def create_temp_table(
-        self,
-        name: str = "temp_table",
-        update:bool=False
-    ):
+    def create_temp_table(self, name: str = "temp_table", update: bool = False):
         self._create_ddb_table(name=name, temp=True, update=update)
 
     @log_decorator()
-    def create_table(self, name: str = "table_", update:bool=False):
+    def create_table(self, name: str = "table_", update: bool = False):
         self._create_ddb_table(name=name, temp=False, update=update)
 
     @log_decorator()
