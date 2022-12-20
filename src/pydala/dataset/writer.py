@@ -547,13 +547,16 @@ class Writer(BaseDataSet):
             if not schema_equal:
                 for n, schema_ in enumerate(schemas):
                     if sort_schema(schema_) != sort_schema(schema):
-                        self.write_table(
-                            pq.read_table(
-                                self._reader[self._base_path].dataset.files[n],
+                        fn = self._reader[self._base_path].dataset.files[n]
+                        table = pq.read_table(
+                                fn,
                                 schema=schema,
                                 filesystem=self._fs,
-                            ),
-                            self._reader[self._base_path].dataset.files[n],
+                            )
+                        columns = sorted(table.column_names)
+                        self.write_table(
+                            table.select(columns),
+                            fn,
                             row_group_size=self._row_group_size
                             if hasattr(self, "_row_group_size")
                             else None,
