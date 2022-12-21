@@ -9,8 +9,8 @@ class Repartition:
         self,
         reader: Reader,
         writer: Writer,
-        caching_method: str = "local",  # or temp_table or table_
-        source_table: str = "pa_table",  # or temp_table or dataset
+        caching_method: str|None = None,  # or local temp_table or table_
+        source_table: str = "pa_table",  # or temp_table or dataset or any existing table in duckdb
         schema_auto_conversion: bool = True,
         delete_source: bool = False,
         add_snapshot: bool = True,
@@ -40,10 +40,10 @@ class Repartition:
 
         if self._reader._path == self._writer._base_path:
             if self._caching_method not in ["local", "temp_table", "table_"]:
-                raise ValueError(
-                    f"Overwriting {self._reader._path} is not allowed without a valid caching_method. "
-                    "Must be 'local', 'table_' or 'temp_table'."
-                )
+               raise ValueError(
+                   f"Overwriting {self._reader._path} is not allowed without a valid caching_method. "
+                   "Must be 'local', 'table_' or 'temp_table'."
+               )
 
             self._writer._mode = "overwrite"
             self._delete_source = False
@@ -57,12 +57,13 @@ class Repartition:
                     self._reader._to_cache()
 
         elif self._caching_method == "temp_table":
-            self._source_table = "temp_table"
-            self._reader.create_temp_table()
+            #self._source_table = "temp_table"
+            self._reader.create_temp_table(name=self._source_table)
 
         elif self._caching_method == "table_":
-            self._source_table = "table_"
-            self._reader.create_table()
+            #self._source_table = source_table
+            self._reader.create_table(name=self._source_table)
+        
 
         # Set source table
         if self._source_table == "pa_table":
@@ -73,19 +74,19 @@ class Repartition:
             if not self._reader.has_dataset:
                 self._source_table = self._reader.load_dataset()
 
-        elif self._source_table == "temp_table":
-            if not self._reader.has_temp_table:
-                self._reader.create_temp_table()
+        # elif self._source_table == "temp_table":
+        #     if not self._reader.has_temp_table:
+        #         self._reader.create_temp_table()
 
-        elif self._source_table == "table_":
-            if not self._reader.has_table_:
-                self._reader.create_table()
+        # elif self._source_table == "table_":
+        #     if not self._reader.has_table_:
+        #         self._reader.create_table()
 
-        else:
-            raise ValueError(
-                f"{self._source_table} is not a valid value for source_table. "
-                "Must be 'dataset', 'pa_table', 'table_' or 'temp_table'."
-            )
+        # else:
+        #     raise ValueError(
+        #         f"{self._source_table} is not a valid value for source_table. "
+        #         "Must be 'dataset', 'pa_table', 'table_' or 'temp_table'."
+        #     )
 
         # add snapshot
         if self._add_snapshot:
