@@ -83,7 +83,7 @@ class BaseFileSystem:
 
         return bucket, path, protocol
 
-    @log_decorator()
+    #@log_decorator()
     def _set_paths(
         self,
         path: str,

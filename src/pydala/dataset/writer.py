@@ -5,7 +5,7 @@ import re
 import duckdb
 import pandas as pd
 import polars as pl
-import progressbar
+from tqdm import tqdm
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
@@ -275,14 +275,14 @@ class Writer(BaseDataSet):
                 range_max += 1
             # for i in progressbar.progressbar(range(0, range_max)):
             self.logger.info(f"Total number of batches: {range_max}")
-            for i in range(0, range_max):
+            for i in tqdm(range(0, range_max)):
 
-                logging_trigger = i % (range_max // 10) if range_max >= 10 else i % 1
-                if logging_trigger:
+                # logging_trigger = i % (range_max // 10) if range_max >= 10 else i % 1
+                # if logging_trigger:
 
-                    self.logger.info(
-                        f"Processed batches: {i}/{range_max} - {i/range_max*100:.1f} %."
-                    )
+                #     self.logger.info(
+                #         f"Processed batches: {i}/{range_max} - {i/range_max*100:.1f} %."
+                #     )
 
                 table_ = table.limit(batch_size, offset=i * batch_size)
                 table_ = self._handle_write_mode(
@@ -362,19 +362,19 @@ class Writer(BaseDataSet):
             self.logger.info(
                 f"Total number of batches: {num_timestamps}. Time range: {timestamps[0]} - {timestamps[-1]}."
             )
-            for sd, ed in list(zip(timestamps[:-1], timestamps[1:])):
+            for sd, ed in tqdm(list(zip(timestamps[:-1], timestamps[1:]))):
 
-                logging_trigger = (
-                    i % (num_timestamps // 10) if num_timestamps >= 10 else i % 1
-                )
-                if logging_trigger == 0:
+                # logging_trigger = (
+                #     i % (num_timestamps // 10) if num_timestamps >= 10 else i % 1
+                # )
+                # if logging_trigger == 0:
 
-                    self.logger.info(
-                        f"Processed batches: {i}/{num_timestamps} - {i/num_timestamps*100:.1f} %."
-                    )
-                    self.logger.info(
-                        f"Processed time range: {timestamps[0]} - {timestamps[i+1]}"
-                    )
+                #     self.logger.info(
+                #         f"Processed batches: {i}/{num_timestamps} - {i/num_timestamps*100:.1f} %."
+                #     )
+                #     self.logger.info(
+                #         f"Processed time range: {timestamps[0]} - {timestamps[i+1]}"
+                #     )
 
                 filter = f"{datetime_column} >= TIMESTAMP '{sd}' AND {datetime_column} < TIMESTAMP '{ed}'"
 
@@ -497,8 +497,8 @@ class Writer(BaseDataSet):
                                 transform_func(table_, **transform_func_kwargs),
                                 ddb=self.ddb,
                             )
-                            
-                        if table_.shape[0]>0:
+
+                        if table_.shape[0] > 0:
                             self.write_table(
                                 table=table_.arrow(),
                                 path=self._gen_path(partition_names=partition_names),
@@ -527,7 +527,7 @@ class Writer(BaseDataSet):
                             transform_func(table_, **transform_func_kwargs),
                             ddb=self.ddb,
                         )
-                    if table_.shape[0]>0:
+                    if table_.shape[0] > 0:
                         self.write_table(
                             table=table_.arrow(),
                             path=self._gen_path(partition_names=None),
@@ -545,14 +545,15 @@ class Writer(BaseDataSet):
             schema, schema_equal = get_unified_schema(schemas)
 
             if not schema_equal:
-                for n, schema_ in enumerate(schemas):
+                self.logger.info("Rewriting schema")
+                for n, schema_ in tqdm(enumerate(schemas)):
                     if sort_schema(schema_) != sort_schema(schema):
                         fn = self._reader[self._base_path].dataset.files[n]
                         table = pq.read_table(
-                                fn,
-                                schema=schema,
-                                filesystem=self._fs,
-                            )
+                            fn,
+                            schema=schema,
+                            filesystem=self._fs,
+                        )
                         columns = sorted(table.column_names)
                         self.write_table(
                             table.select(columns),
