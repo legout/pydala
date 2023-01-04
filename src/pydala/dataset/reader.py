@@ -302,7 +302,7 @@ class Reader(BaseDataSet):
         name: str,
         temp: bool = True,
         update: bool = False,
-        filter_:str|None=None
+        filter_: str | None = None,
     ):
         if self._caching and not self.is_cached:
             self._to_cache()
@@ -341,7 +341,7 @@ class Reader(BaseDataSet):
 
         if update:
             sql += f" EXPECT SELECT * FROM {name}"
-            
+
         if filter_:
             sql += f" WHERE {filter_}"
 
@@ -355,18 +355,22 @@ class Reader(BaseDataSet):
 
         if self._distinct:
             sql = sql.replace("SELECT *", "SELECT DISTINCT *")
-            
+
         if self._sort_by:
             sql += f" ORDER BY {self._sort_by_ddb}"
 
         self.ddb.execute(sql)
 
     @log_decorator()
-    def create_temp_table(self, name: str = "temp_table", update: bool = False, filter_:str|None=None):
+    def create_temp_table(
+        self, name: str = "temp_table", update: bool = False, filter_: str | None = None
+    ):
         self._create_ddb_table(name=name, temp=True, update=update, filter_=filter_)
 
     @log_decorator()
-    def create_table(self, name: str = "table_", update: bool = False, filter_:str|None=None):
+    def create_table(
+        self, name: str = "table_", update: bool = False, filter_: str | None = None
+    ):
         self._create_ddb_table(name=name, temp=False, update=update, filter_=filter_)
 
     @log_decorator()

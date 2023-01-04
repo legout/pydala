@@ -473,7 +473,8 @@ class TimeFly(BaseFileSystem):
         format = self.get_format(sub_path="current")
         if format:
             return (
-                len(self._fs.glob(os.path.join(self._path, f"current/*.{format}"))) == 0
+                len(self._fs.glob(os.path.join(self._path, f"current/**.{format}")))
+                == 0
             )
         else:
             return True

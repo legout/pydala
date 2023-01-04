@@ -9,7 +9,7 @@ class Repartition:
         self,
         reader: Reader,
         writer: Writer,
-        caching_method: str|None = None,  # or local temp_table or table_
+        caching_method: str | None = None,  # or local temp_table or table_
         source_table: str = "pa_table",  # or temp_table or dataset or any existing table in duckdb
         schema_auto_conversion: bool = True,
         delete_source: bool = False,
@@ -38,16 +38,6 @@ class Repartition:
             self._reader.set_pyarrow_schema()
             self._schema = self._reader._schema
 
-        if self._reader._path == self._writer._base_path:
-            if self._caching_method not in ["local", "temp_table", "table_"]:
-               raise ValueError(
-                   f"Overwriting {self._reader._path} is not allowed without a valid caching_method. "
-                   "Must be 'local', 'table_' or 'temp_table'."
-               )
-
-            self._writer._mode = "overwrite"
-            self._delete_source = False
-
         # Create cache
         if self._caching_method == "local":
             if self._reader._protocol == "file":
@@ -57,13 +47,12 @@ class Repartition:
                     self._reader._to_cache()
 
         elif self._caching_method == "temp_table":
-            #self._source_table = "temp_table"
+            # self._source_table = "temp_table"
             self._reader.create_temp_table(name=self._source_table)
 
         elif self._caching_method == "table_":
-            #self._source_table = source_table
+            # self._source_table = source_table
             self._reader.create_table(name=self._source_table)
-        
 
         # Set source table
         if self._source_table == "pa_table":
@@ -72,27 +61,23 @@ class Repartition:
 
         elif self._source_table == "dataset":
             if not self._reader.has_dataset:
-                self._source_table = self._reader.load_dataset()
-
-        # elif self._source_table == "temp_table":
-        #     if not self._reader.has_temp_table:
-        #         self._reader.create_temp_table()
-
-        # elif self._source_table == "table_":
-        #     if not self._reader.has_table_:
-        #         self._reader.create_table()
-
-        # else:
-        #     raise ValueError(
-        #         f"{self._source_table} is not a valid value for source_table. "
-        #         "Must be 'dataset', 'pa_table', 'table_' or 'temp_table'."
-        #     )
+                self._reader.load_dataset()
 
         # add snapshot
         if self._add_snapshot:
             self._reader.timefly.add_snapshot()
 
         self._source = self._reader.rel
+
+        if self._reader._path == self._writer._base_path:
+            if self._caching_method not in ["local", "temp_table", "table_"]:
+                raise ValueError(
+                    f"Overwriting {self._reader._path} is not allowed without a valid caching_method. "
+                    "Must be 'local', 'table_' or 'temp_table'."
+                )
+
+            self._rm()
+            self._delete_source = False
 
     def _rm(self):
         if self._reader.cached:
