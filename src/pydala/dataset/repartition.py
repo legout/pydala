@@ -28,6 +28,7 @@ class Repartition:
         self._mode = "delta"
         self._schema_auto_conversion = schema_auto_conversion
         self._delete_source = delete_source
+        self._cached = False
 
         self._add_snapshot = False
         if hasattr(self, "timefly") and add_snapshot:
@@ -45,14 +46,17 @@ class Repartition:
             else:
                 if not self._reader._cached:
                     self._reader._to_cache()
+            self._cached = True
 
         elif self._caching_method == "temp_table":
             # self._source_table = "temp_table"
             self._reader.create_temp_table(name=self._source_table)
+            self._cached = True
 
         elif self._caching_method == "table_":
             # self._source_table = source_table
             self._reader.create_table(name=self._source_table)
+            self._cached = True
 
         # Set source table
         if self._source_table == "pa_table":
@@ -80,7 +84,7 @@ class Repartition:
             self._delete_source = False
 
     def _rm(self):
-        if self._reader.cached:
+        if self._cached:
             self._reader._fs.rm(self._reader._path, recursive=True)
 
     def sort(self, by: str | list | None, ascending: bool | list | None = None):
