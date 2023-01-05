@@ -1779,18 +1779,18 @@ plugin = ["poetry (>=1.2.0,<2.0.0)"]
 
 [[package]]
 name = "polars"
-version = "0.15.7"
+version = "0.15.11"
 description = "Blazingly fast DataFrame library"
 category = "main"
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "polars-0.15.7-cp37-abi3-macosx_10_7_x86_64.whl", hash = "sha256:3628ab3dc8970bccc4bd2d63e712ffc8965b165c0510e0d3d88a735bd1cb669b"},
-    {file = "polars-0.15.7-cp37-abi3-macosx_11_0_arm64.whl", hash = "sha256:08f78161859cd19429c155556228ae76940d98e383220af9190870b32141cbab"},
-    {file = "polars-0.15.7-cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:5b08c0df1b6d4eb6d29da3900cf146aa7d29d79b3eacf28011a40675d82623b6"},
-    {file = "polars-0.15.7-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:05ee53bb22304885dd23644e7045429a384960b118466d8d544f6f5b230e6a05"},
-    {file = "polars-0.15.7-cp37-abi3-win_amd64.whl", hash = "sha256:392dae1504198d2cf7b36c28ab16276cc64ee19828b6867fed382984c3dac3d5"},
-    {file = "polars-0.15.7.tar.gz", hash = "sha256:26d66af9eddbb9c7b8b297558f8be138557eb525511b93fc7b28da848009dca5"},
+    {file = "polars-0.15.11-cp37-abi3-macosx_10_7_x86_64.whl", hash = "sha256:77552af5a57c35bd61dede4dc1856456bbe1638c03d49b51c7855f2cb7c5d186"},
+    {file = "polars-0.15.11-cp37-abi3-macosx_11_0_arm64.whl", hash = "sha256:9487c278af13e3d9c540f5e9402d758f2faeb76cb4af05ab573460dafd34ace5"},
+    {file = "polars-0.15.11-cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:82c491dd3d3789661775464448fbcdd5f332845d717665840896b263d20e47fa"},
+    {file = "polars-0.15.11-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:93cb399917a05b2def9bd1104b5c9fe75768f6e13f5c826fabd98a533aacc4a8"},
+    {file = "polars-0.15.11-cp37-abi3-win_amd64.whl", hash = "sha256:84e21e27555ae49d2cca4792497d7052b65d80f4d8fc7191d7d570073587986c"},
+    {file = "polars-0.15.11.tar.gz", hash = "sha256:3a73a68f46005df9f668e723399082ab009f59483c36b70e751e11ac783c0181"},
 ]
 
 [package.extras]
