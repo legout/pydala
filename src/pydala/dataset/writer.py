@@ -535,7 +535,7 @@ class Writer(BaseDataSet):
                             **kwargs,
                         )
 
-    def unify_schema(self):
+    def unify_schema(self, sort_schema_:bool=True):
 
         if self._format == "parquet" and self._protocol != "file":
             self._fs.invalidate_cache()
@@ -547,21 +547,38 @@ class Writer(BaseDataSet):
             if not schema_equal:
                 self.logger.info("Rewriting schema")
                 for n, schema_ in tqdm(enumerate(schemas)):
-                    if schema_ != schema:
-                        fn = self._reader[self._base_path].dataset.files[n]
-                        table = pq.read_table(
-                            fn,
-                            schema=sort_schema(schema),
-                            filesystem=self._fs,
-                        )
-                        columns = sorted(table.column_names)
-                        self.write_table(
-                            table.select(columns),
-                            fn,
-                            row_group_size=self._row_group_size
-                            if hasattr(self, "_row_group_size")
-                            else None,
-                        )
+                    if sort_schema_:
+                        if schema_ != schema:
+                            fn = self._reader[self._base_path].dataset.files[n]
+                            table = pq.read_table(
+                                fn,
+                                schema=sort_schema(schema),
+                                filesystem=self._fs,
+                            )
+                            columns = sorted(table.column_names)
+                            self.write_table(
+                                table.select(columns),
+                                fn,
+                                row_group_size=self._row_group_size
+                                if hasattr(self, "_row_group_size")
+                                else None,
+                            )
+                    else:
+                        if sort_schema(schema_) != sort_schema(schema):
+                            fn = self._reader[self._base_path].dataset.files[n]
+                            table = pq.read_table(
+                                fn,
+                                schema=schema,
+                                filesystem=self._fs,
+                            )
+                            columns = sorted(table.column_names)
+                            self.write_table(
+                                table.select(columns),
+                                fn,
+                                row_group_size=self._row_group_size
+                                if hasattr(self, "_row_group_size")
+                                else None,
+                            )
 
 
 class TimeFlyWriter(Writer):
