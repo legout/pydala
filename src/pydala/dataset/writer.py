@@ -547,11 +547,11 @@ class Writer(BaseDataSet):
             if not schema_equal:
                 self.logger.info("Rewriting schema")
                 for n, schema_ in tqdm(enumerate(schemas)):
-                    if sort_schema(schema_) != sort_schema(schema):
+                    if schema_ != schema:
                         fn = self._reader[self._base_path].dataset.files[n]
                         table = pq.read_table(
                             fn,
-                            schema=schema,
+                            schema=sort_schema(schema),
                             filesystem=self._fs,
                         )
                         columns = sorted(table.column_names)
