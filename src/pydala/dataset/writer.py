@@ -71,7 +71,7 @@ class Writer(BaseDataSet):
             self._partitioning = [self._partitioning]
 
         if not self._partitioning_flavor and self._partitioning:  # is not None:
-            self._partitioning_flavor = "hive"
+           self._partitioning_flavor = "hive"
 
         self.compression()
         self.partitioning()
