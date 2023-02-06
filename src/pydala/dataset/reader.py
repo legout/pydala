@@ -439,7 +439,7 @@ class Reader(BaseDataSet):
             )
 
         elif self.has_relation:
-            self._pd_dataframe = to_polars(self._drop_sort_distinct(table=self.rel))
+            self._pl_dataframe = to_polars(self._drop_sort_distinct(table=self.rel))
 
         else:
             if not self.has_dataset:
