@@ -9,13 +9,14 @@ class Repartition:
         self,
         reader: Reader,
         writer: Writer,
-        caching_method: str | None = None,  # or local temp_table or table_
+        caching_method: str | None = None,  # or local or temp_table or table_
         source_table: str = "pa_table",  # or temp_table or dataset or any existing table in duckdb
         schema_auto_conversion: bool = True,
         delete_source: bool = False,
         add_snapshot: bool = True,
     ):
         self._reader = reader
+        self._reader._caching = False
         self._writer = writer
         self._writer.ddb = self._reader.ddb
 
