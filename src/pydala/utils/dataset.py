@@ -124,10 +124,9 @@ def get_unified_schema(
             else _polars_unified_schema(schema, schema2)
         )
 
-        if not schemas_equal_:
-            schemas_equal = schemas_equal_
+        schemas_equal *= schemas_equal_
 
-    return schema, schemas_equal
+    return schema, bool(schemas_equal)
 
 
 def sort_schema(schema):
