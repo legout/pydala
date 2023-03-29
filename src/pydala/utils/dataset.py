@@ -1,16 +1,25 @@
+from typing import List, Tuple
+
+import duckdb
 import polars as pl
 import pyarrow as pa
-import pyarrow.dataset as ds
-from fsspec import spec
-from pyarrow.fs import FileSystem
+
+from ..utils.base import run_parallel
 
 
-def _pyarrow_unified_schema(
-    schema1: pa.Schema, schema2: pa.Schema
-) -> tuple[dict, bool]:
-    schema = []
-    schemas_equal = True
+def _unify_schema_pyarrow(schema1: pa.Schema, schema2: pa.Schema) -> Tuple[dict, bool]:
+    """Returns a unified pyarrow schema.
+
+    Args:
+        schema1 (pa.Schema): pyarrow schema 1
+        schema2 (pa.Schema): pyarrow schema 2
+
+    Returns:
+        Tuple[dict, bool]: unified pyarrow schema, bool value if schemas were equal
+    """
+
     dtype_rank = [
+        pa.null()
         pa.int8(),
         pa.int16(),
         pa.int32(),
@@ -20,7 +29,25 @@ def _pyarrow_unified_schema(
         pa.float64(),
         pa.string(),
     ]
-    all_names = sorted(set(schema1.names + schema2.names))
+
+    # check for equal columns and column order
+    if schema1.names == schema2.names:
+        if schema1.types == schema2.types:
+            return schema1, True
+
+        else:
+            schemas_equal = False
+            all_names = schema1.names
+
+    elif sorted(schema1.names) == sorted(schema2.names):
+        schemas_equal = False
+        all_names = sorted(schema1.names)
+
+    else:
+        schemas_equal = False
+        all_names = sorted(set(schema1.names + schema2.names))
+
+    unified_schema = []
     for name in all_names:
         if name in schema1.names:
             type1 = schema1.field(name).type
@@ -42,18 +69,26 @@ def _pyarrow_unified_schema(
             else:
                 rank2 = 0
 
-            schema.append(pa.field(name, type1 if rank1 > rank2 else type2))
+            unified_schema.append(pa.field(name, type1 if rank1 > rank2 else type2))
 
         else:
-            schema.append(pa.field(name, type1))
+            unified_schema.append(pa.field(name, type1))
 
-    return pa.schema(schema), schemas_equal
+    return pa.schema(unified_schema), schemas_equal
 
 
-def _polars_unified_schema(schema1: dict, schema2: dict) -> tuple[dict, bool]:
-    schema = {}
-    schemas_equal = True
+def _unify_schema_polars(schema1: dict, schema2: dict) -> Tuple[dict, bool]:
+    """Returns a unified polars schema.
+
+    Args:
+        schema1 (dict): polars schema 1
+        schema2 (dict): polars schema2
+
+    Returns:
+        Tuple[dict, bool]: unified polars schema
+    """
     dtype_rank = [
+        pl.Null(),
         pl.Int8(),
         pl.Int16(),
         pl.Int32(),
@@ -62,7 +97,23 @@ def _polars_unified_schema(schema1: dict, schema2: dict) -> tuple[dict, bool]:
         pl.Float64(),
         pl.Utf8(),
     ]
-    all_names = sorted(set(list(schema1.keys()) + list(schema2.keys())))
+    if list(schema1.keys()) == list(schema2.keys()):
+        if list(schema1.values()) == list(schema2.values()):
+            return schema1, True
+
+        else:
+            schemas_equal = False
+            all_names = list(schema1.keys())
+
+    elif sorted(schema1.keys()) == sorted(schema2.keys()):
+        schemas_equal = False
+        all_names = sorted(schema1.keys())
+
+    else:
+        schemas_equal = False
+        all_names = sorted(set(list(schema1.keys()) + list(schema2.keys())))
+
+    unified_schema = dict()
     for name in all_names:
         if name in schema1:
             type1 = schema1[name]
@@ -84,52 +135,34 @@ def _polars_unified_schema(schema1: dict, schema2: dict) -> tuple[dict, bool]:
             else:
                 rank2 = 0
 
-            schema[name] = type1 if rank1 > rank2 else type2
+            unified_schema[name] = type1 if rank1 > rank2 else type2
 
         else:
-            schema[name] = type1
-    return schema, schemas_equal
+            unified_schema[name] = type1
+    return unified_schema, schemas_equal
 
 
-def list_schemas(
-    path: str | None = None,
-    dataset: pa._dataset.Dataset | None = None,
-    filesystem: spec.AbstractFileSystem | FileSystem | None = None,
-):
-    if path:
-        dataset = ds.dataset(path, filesystem=filesystem)
-    else:
-        if not dataset:
-            raise ValueError("Either path or dataset must be not None.")
+def unify_schema(
+    schema1: pa.Schema | dict, schema2: pa.Schema | dict
+) -> Tuple[pa.Schema, bool] | Tuple[dict, bool]:
+    """Returns a unified pyarrow or polars schema.
 
-    all_schemas = [frag.physical_schema for frag in dataset.get_fragments()]
-    return all_schemas
+    Args:
+        schema1 (pa.Schema | dict): pyarrow or polars schema 1
+        schema2 (pa.Schema | dict): pyarrow or polars schema 2
 
-
-def get_unified_schema(
-    schemas: list[pa.Schema] | list[dict] | None = None,
-    path: str | None = None,
-    dataset: pa._dataset.Dataset | None = None,
-    filesystem: spec.AbstractFileSystem | FileSystem | None = None,
-):
-    if not schemas:
-        schemas = list_schemas(path=path, dataset=dataset, filesystem=filesystem)
-
-    schemas_equal = True
-    schema = schemas[0]
-    for schema2 in schemas[1:]:
-        schema, schemas_equal_ = (
-            _pyarrow_unified_schema(schema, schema2)
-            if isinstance(schema, pa.Schema)
-            else _polars_unified_schema(schema, schema2)
-        )
-
-        schemas_equal *= schemas_equal_
-
-    return schema, bool(schemas_equal)
+    Returns:
+        Tuple[pa.Schema, bool] | Tuple[dict, bool]: unified pyarrow or polars schema and
+    """
+    unified_schema, schemas_equal = (
+        _unify_schema_pyarrow(schema1, schema2)
+        if isinstance(schema1, pa.Schema)
+        else _unify_schema_polars(schema1, schema2)
+    )
+    return unified_schema, schemas_equal
 
 
-def sort_schema(schema):
+def _sort_schema_pyarrow(schema: pa.Schema) -> pa.Schema:
     return pa.schema(
         [
             pa.field(name, type_)
@@ -138,32 +171,114 @@ def sort_schema(schema):
     )
 
 
-def pyarrow_schema_to_dict(schema: pa.Schema):
-    return dict(zip(schema.names, map(_pyarrow_datatype_to_str, schema.types)))
+def _sort_schema_polars(schema: dict) -> dict:
+    return {name: schema[name] for name in sorted(schema.keys())}
 
 
-def _pyarrow_datatype_to_str(data_type: pa.DataType):
-    if isinstance(data_type, pa.DataType):
-        return str(data_type)
-    return data_type
+def sort_schema(schema: pa.Schema | dict) -> pa.Schema | dict:
+    sorted_schema = (
+        _sort_schema_pyarrow(schema)
+        if isinstance(schema, pa.Schema)
+        else _sort_schema_polars(schema)
+    )
+    return sorted_schema
 
 
-def _str_to_pyarrow_datatype(data_type: str):
-    if "timestamp" in data_type and "tz" in data_type:
-        tz = data_type.split("tz=")[-1].split("]")[0]
-        unit = data_type.split("[")[-1].split(",")[0].split("]")[0]
-
-        return pa.timestamp(unit=unit, tz=tz)
-
-    return pa.type_for_alias(data_type)
+def _convert_dtype_polars_to_pyarrow(dtype: pl.DataType) -> pa.lib.DataType:
+    return pl.utils.convert.dtype_to_arrow_type(dtype)
 
 
-def pyarrow_schema_from_dict(schema: dict):
-    return pa.schema(
-        dict(
-            zip(
-                list(schema.keys()),
-                map(_str_to_pyarrow_datatype, list(schema.values())),
+def _convert_dtype_pyarrow_to_polars(dtype: pa.lib.DataType) -> pl.DataType:
+    dtype_mapping = {
+        pa.int8(): pl.Int8(),
+        pa.int16(): pl.Int16(),
+        pa.int32(): pl.Int32(),
+        pa.int64(): pl.Int64(),
+        pa.uint8(): pl.UInt8(),
+        pa.uint16(): pl.UInt16(),
+        pa.uint32(): pl.UInt32(),
+        pa.uint64(): pl.UInt64(),
+        pa.float16(): pl.Float32(),
+        pa.float32(): pl.Float32(),
+        pa.float64(): pl.Float64(),
+        pa.bool_(): pl.Boolean(),
+        pa.large_utf8(): pl.Utf8(),
+        pa.utf8(): pl.Utf8(),
+        pa.date32(): pl.Date(),
+        pa.timestamp("us"): pl.Datetime("us"),
+        pa.timestamp("ms"): pl.Datetime("ms"),
+        pa.timestamp("us"): pl.Datetime("us"),
+        pa.timestamp("ns"): pl.Datetime("ns"),
+        pa.duration("us"): pl.Duration("us"),
+        pa.duration("ms"): pl.Duration("ms"),
+        pa.duration("us"): pl.Duration("us"),
+        pa.duration("ns"): pl.Duration("ns"),
+        pa.time64("us"): pl.Time(),
+        pa.null(): pl.Null(),
+    }
+    tz = None
+    if isinstance(dtype, pa.lib.TimestampType):
+        dtype, tz = pa.timestamp(dtype.unit), dtype.tz
+
+    pl_dtype = dtype_mapping[dtype]
+    if tz:
+        pl_dtype.tz = tz
+
+    return pl_dtype
+
+
+def convert_dtype(
+    dtype: pa.lib.DataType | pl.DataType,
+) -> pl.DataType | pa.lib.DataType:
+    dtype = (
+        _convert_dtype_pyarrow_to_polars(dtype)
+        if isinstance(dtype, pa.lib.DataType)
+        else _convert_dtype_polars_to_pyarrow(dtype)
+    )
+    return dtype
+
+
+def _convert_schema_pyarrow_to_polars(schema: pa.Schema) -> dict:
+    return {
+        field.name: _convert_dtype_pyarrow_to_polars(field.type) for field in schema
+    }
+
+
+def _convert_schema_polars_to_pyarrow(schema: dict) -> pa.Schema:
+    return pa.Schema([pa.field(name, dtype) for name, dtype in schema.items()])
+
+
+def convert_schema(schema: pa.Schema | dict) -> dict | pa.Schema:
+    return (
+        _convert_schema_pyarrow_to_polars(schema)
+        if isinstance(schema, pa.Schema)
+        else _convert_schema_polars_to_pyarrow(schema)
+    )
+
+
+def sync_datasets(dataset1, dataset2, delete=True):
+    def transfer_file(f):
+        with dataset2._dir_filesystem.open(f, "wb") as ff:
+            ff.write(dataset1.read_bytes(f))
+
+    def delete_file(f):
+        dataset2._dir_filesystem.rm(f)
+
+    new_files = duckdb.from_arrow(
+        dataset1.files.select(["path", "name", "size"]).to_arrow()
+    ).except_(
+        duckdb.from_arrow(dataset2.files.select(["path", "name", "size"]).to_arrow())
+    )
+
+    _ = run_parallel(transfer_file, new_files)
+
+    if delete:
+        rm_files = duckdb.from_arrow(
+            dataset2.files.select(["path", "name", "size"]).to_arrow()
+        ).except_(
+            duckdb.from_arrow(
+                dataset1.files.select(["path", "name", "size"]).to_arrow()
             )
         )
-    )
+
+        _ = run_parallel(delete_file, rm_files)

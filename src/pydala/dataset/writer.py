@@ -16,7 +16,7 @@ from ..utils.base import random_id
 from ..utils.dataset import get_unified_schema, list_schemas, sort_schema
 from ..utils.logging import log_decorator
 from ..utils.table import get_tables_diff, to_relation
-from .base import BaseDataSet
+from ._base import BaseDataSet
 from .reader import Reader
 from .timefly import TimeFly
 
@@ -147,14 +147,12 @@ class Writer(BaseDataSet):
         return os.path.join(path, filename)
 
     def _get_partition_filters(self):
-
         filters = []
         all_partitions = (
             self._table.project(",".join(self._partitioning)).distinct().fetchall()
         )
 
         for partition_names in all_partitions:
-
             filter_ = []
             for p in zip(self._partitioning, partition_names):
                 filter_.append(f"{p[0]}='{p[1]}'")
@@ -202,7 +200,6 @@ class Writer(BaseDataSet):
                 end_time = table.max(datetime_column).fetchone()[0]
 
         if self._fs.exists(path):
-
             if self._mode == "raise":
                 raise FileExistsError(
                     f"Path '{path}' already exists. "
@@ -268,7 +265,6 @@ class Writer(BaseDataSet):
         base_path: str | None = None,
         delta_subset: list | None = None,
     ):
-
         if isinstance(batch_size, int):
             range_max = table.shape[0] // batch_size
             if range_max != table.shape[0] / batch_size:
@@ -276,7 +272,6 @@ class Writer(BaseDataSet):
             # for i in progressbar.progressbar(range(0, range_max)):
             self.logger.info(f"Total number of batches: {range_max}")
             for i in tqdm(range(0, range_max)):
-
                 # logging_trigger = i % (range_max // 10) if range_max >= 10 else i % 1
                 # if logging_trigger:
 
@@ -363,7 +358,6 @@ class Writer(BaseDataSet):
                 f"Total number of batches: {num_timestamps}. Time range: {timestamps[0]} - {timestamps[-1]}."
             )
             for sd, ed in tqdm(list(zip(timestamps[:-1], timestamps[1:]))):
-
                 # logging_trigger = (
                 #     i % (num_timestamps // 10) if num_timestamps >= 10 else i % 1
                 # )
@@ -423,7 +417,6 @@ class Writer(BaseDataSet):
                         pl.from_arrow(table).write_csv(file=f, **kwargs)
 
             else:
-
                 pq.write_table(
                     table,
                     path,
@@ -452,7 +445,6 @@ class Writer(BaseDataSet):
         transform_func_kwargs: dict | None = None,
         **kwargs,
     ):
-
         table = self._drop_sort_distinct(table=table)
 
         self._table = to_relation(
@@ -471,7 +463,6 @@ class Writer(BaseDataSet):
             filters = self._get_partition_filters()
 
             for partition_filter, partition_names in filters:
-
                 table_part = self._table.filter(partition_filter)
 
                 # check if base_path for partition is empty and act depending on mode and distinct.
@@ -535,8 +526,7 @@ class Writer(BaseDataSet):
                             **kwargs,
                         )
 
-    def unify_schema(self, sort_schema_:bool=True):
-
+    def unify_schema(self, sort_schema_: bool = True):
         if self._format == "parquet" and self._protocol != "file":
             self._fs.invalidate_cache()
             self._set_reader(base_path=self._base_path)
