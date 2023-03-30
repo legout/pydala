@@ -1,18 +1,14 @@
 import logging
-import os
 import random
 import string
 import sys
-from logging import handlers
-from typing import Any
-
-import rtoml
-from fsspec import spec
-from pyarrow.fs import FileSystem
+from loguru import logger
+from typing import List, Tuple, Callable, Any
+from joblib import Parallel, delayed
 
 
 def get_logger(name: str, log_file: str):
-    logger = logging.getLogger(name)
+    logger
     logger.setLevel(logging.INFO)
 
     formatter = logging.Formatter(
@@ -21,10 +17,7 @@ def get_logger(name: str, log_file: str):
 
     stdout_handler = logging.StreamHandler(sys.stdout)
     stdout_handler.setLevel(logging.INFO)
-    # stdout_handler.setFormatter(formatter)
 
-    # ath(log_file).mkdir(parents=True, exist_ok=True)
-    # file_handler = logging.FileHandler(log_file)
     file_handler = handlers.TimedRotatingFileHandler(
         log_file, when="D", interval=1, backupCount=2
     )
@@ -37,10 +30,21 @@ def get_logger(name: str, log_file: str):
     return logger
 
 
-def get_ddb_sort_str(sort_by: str | list, ascending: bool | list | None = None) -> str:
+def sort_as_sql(
+    sort_by: str | List[str], ascending: bool | List[bool] | None = None
+) -> str:
+    """Generats a SQL string for the given columns.
+
+    Args:
+        sort_by (str | List[str]): Columns to sort.
+        ascending (bool | List[bool] | None, optional): Wheter to sort
+        ascending or descending. Defaults to None.
+
+    Returns:
+        str: SQL string
+    """
     ascending = ascending or True
     if isinstance(sort_by, list):
-
         if isinstance(ascending, bool):
             ascending = [ascending] * len(sort_by)
 
@@ -56,12 +60,14 @@ def get_ddb_sort_str(sort_by: str | list, ascending: bool | list | None = None) 
     return sort_by_ddb
 
 
-def random_id():
+def random_id() -> str:
+    "Returns a random id."
     alphabet = string.ascii_lowercase + string.digits
     return "".join(random.choices(alphabet, k=8))
 
 
-def convert_size_unit(size, unit="MB"):
+def humanize_size(size: int, unit="MB") -> float:
+    "Human-readable size"
     if unit == "B":
         return round(size, 1)
     elif unit == "KB":
@@ -76,72 +82,27 @@ def convert_size_unit(size, unit="MB"):
         return round(size / 1024**5, 1)
 
 
-class NestedDictReplacer:
-    def __init__(self, d: dict) -> None:
-        self._d = d
+def run_parallel(
+    func: Callable,
+    func_params: list | List[List] | List[Tuple],
+    *args,
+    n_jobs: int = -1,
+    backend: str = "loky",
+    **kwargs,
+)->List[Any]:
+    """Runs a function for a list of parameters in parallel.
 
-    def _dict_replace_value(self, d: dict, old: str | None, new: str | None) -> dict:
-        x = {}
-        for k, v in d.items():
-            if isinstance(v, dict):
-                v = self._dict_replace_value(v, old, new)
-            elif isinstance(v, list):
-                v = self._list_replace_value(v, old, new)
-            else:
-                v = v if v != old else new
-            x[k] = v
-        return x
+    Args:
+        func (Callable): function to run in parallel.
+        func_params (list | List[List] | List[Tuple]): parameters for the function
+        n_jobs (int, optional): Number of joblib workers. Defaults to -1.
+        backend (str, optional): joblib backend. Valid options are
+        `loky`,`threading`, `mutliprocessing` or `sequential`.  Defaults to "loky".
 
-    def _list_replace_value(self, l: list, old: str | None, new: str | None) -> list:
-        x = []
-        for e in l:
-            if isinstance(e, list):
-                e = self._list_replace_value(e, old, new)
-            elif isinstance(e, dict):
-                e = self._dict_replace_value(e, old, new)
-            else:
-                e = e if e != old else new
-            x.append(e)
-        return x
-
-    def replace(self, old: str | None, new: str | None) -> dict:
-        d = self._d
-        return self._dict_replace_value(d, old, new)
-
-
-def read_toml(path: str, filesystem: FileSystem | spec.AbstractFileSystem) -> dict:
-    if filesystem.exists(path):
-        with filesystem.open(path, "r") as f:
-            return NestedDictReplacer(rtoml.load(f)).replace("None", None)
-    raise OSError(f"path {path} not exists.")
-
-
-def write_toml(
-    config: dict,
-    path: str,
-    filesystem: FileSystem | spec.AbstractFileSystem,
-    pretty: bool = False,
-) -> None:
-
-    if not filesystem.exists(path):
-        try:
-            filesystem.mkdirs(path=os.path.dirname(path), exist_ok=True)
-        except PermissionError:
-            pass
-
-    with filesystem.open(path, "w") as f:
-        rtoml.dump(
-            NestedDictReplacer(config).replace(None, "None"),
-            f,
-            pretty=pretty,
-        )
-
-
-def create_nested_dict(key: str, val: Any, sep: str = ".") -> dict:
-    if sep not in key:
-        return {key: val}
-    key, new_key = key.split(sep, 1)
-    return {key: create_nested_dict(new_key, val, sep)}
-
-
-# def get_
+    Returns:
+        List[Any]: function output.
+    """
+    res = Parallel(n_jobs=n_jobs, backend=backend)(
+        delayed(func)(fp, *args, **kwargs) for fp in func_params
+    )
+    return res

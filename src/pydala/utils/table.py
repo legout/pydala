@@ -2,7 +2,7 @@ import duckdb
 import pandas as pd
 import polars as pl
 import pyarrow as pa
-import pyarrow.dataset as ds
+from typing import List, Tuple
 
 
 def to_polars(
@@ -12,6 +12,9 @@ def to_polars(
     | duckdb.DuckDBPyRelation
     | pa._dataset.Dataset,
 ) -> pl.DataFrame:
+    """Converts a pyarrow table/dataset, pandas dataframe or duckdb relation
+    into a polars dataframe.
+    """
 
     if isinstance(table, pa.Table):
         pl_dataframe = pl.from_arrow(table)
@@ -20,10 +23,10 @@ def to_polars(
         pl_dataframe = pl.from_pandas(table)
 
     elif isinstance(table, pa._dataset.Dataset):
-        pl_dataframe = pl.from_arrow(table.to_table())
+        pl_dataframe = pl.scan_pyarrow_dataset(table)
 
     elif isinstance(table, duckdb.DuckDBPyRelation):
-        pl_dataframe = pl.from_arrow(table.arrow())
+        pl_dataframe = table.pl()
 
     else:
         pl_dataframe = table
@@ -38,7 +41,9 @@ def to_pandas(
     | duckdb.DuckDBPyRelation
     | pa._dataset.Dataset,
 ) -> pd.DataFrame:
-
+    """Converts a pyarrow table/dataset, polars dataframe or duckdb relation
+    into a pandas dataframe
+    """
     if isinstance(table, pa.Table):
         pd_dataframe = table.to_pandas()
 
@@ -64,39 +69,60 @@ def to_relation(
     | pd.DataFrame
     | pl.DataFrame
     | str,
-    ddb: duckdb.DuckDBPyConnection,
+    ddb: duckdb.DuckDBPyConnection | None = None,
+    name: str | None = None,
+    **kwargs,
 ) -> duckdb.DuckDBPyRelation:
+    """Converts a pyarrow table/dataset, pandas dataframe or polars dataframe
+    into a duckdb relation
+    """
+    if ddb is None:
+        ddb = duckdb.connect()
 
     if isinstance(table, pa.Table):
-
-        return ddb.from_arrow(table)
+        if name is not None:
+            return ddb.from_arrow(table).set_alias(name)
+        else:
+            return ddb.from_arrow(table)
 
     elif isinstance(table, pa._dataset.Dataset):
-
-        table = ddb.from_arrow(table)
-
-        return table
+        if name is not None:
+            return ddb.from_arrow(table).set_alias(name)
+        else:
+            return ddb.from_arrow(table)
 
     elif isinstance(table, pd.DataFrame):
-
-        return ddb.from_df(table)
+        if name is not None:
+            return ddb.from_df(table).set_alias(name)
+        else:
+            return ddb.from_df(table)
 
     elif isinstance(table, pl.DataFrame):
-
-        return ddb.from_arrow(table.to_arrow())
+        if name is not None:
+            return ddb.from_arrow(table.to_arrow()).set_alias(name)
+        else:
+            return ddb.from_arrow(table.to_arrow())
 
     elif isinstance(table, str):
         if ".parquet" in table:
-            table = ddb.from_parquet(table)
+            if name is not None:
+                table = ddb.from_parquet(table, **kwargs).set_alias(name)
+            else:
+                table = ddb.from_parquet(table, **kwargs)
         elif ".csv" in table:
-            table = ddb.from_csv_auto(table)
+            if name is not None:
+                table = ddb.from_csv_auto(table, **kwargs).set_alias(name)
+            else:
+                table = ddb.from_csv_auto(table, **kwargs)
         else:
-            table = ddb.query(f"SELECT * FROM '{table}'")
+            if name is not None:
+                table = ddb.from_query(f"SELECT * FROM '{table}'").set_alias(name)
+            else:
+                table = ddb.from_query(f"SELECT * FROM '{table}'")
 
         return table
 
     elif isinstance(table, duckdb.DuckDBPyRelation):
-
         return table
 
 
@@ -106,11 +132,10 @@ def sort_table(
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
     | pa._dataset.Dataset,
-    sort_by: str | list | tuple | None,
-    ascending: bool | list | tuple | None,
-    ddb: duckdb.DuckDBPyConnection | None = None,
+    sort_by: str | List[str] | Tuple[str] | None,
+    ascending: bool | List[bool] | Tuple[bool] | None,
 ) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
-
+    "Sort a pyarrow table, pandas or polars dataframe or duckdb relation."
     if sort_by:
         ascending = ascending or True
 
@@ -120,24 +145,25 @@ def sort_table(
             reverse = [not el for el in ascending]
 
         if isinstance(table, pa.Table):
-
             return to_polars(table=table).sort(by=sort_by, reverse=reverse).to_arrow()
 
         elif isinstance(table, pd.DataFrame):
             return to_polars(table=table).sort(by=sort_by, reverse=reverse).to_pandas()
 
         elif isinstance(table, pa._dataset.Dataset):
-            return to_polars(table=table).sort(by=sort_by, reverse=reverse).to_arrow()
+            return (
+                to_polars(table=table)
+                .sort(by=sort_by, reverse=reverse)
+                .collect()
+                .to_arrow()
+            )
 
         elif isinstance(table, pl.DataFrame):
             return table.sort(by=sort_by, reverse=reverse)
 
         elif isinstance(table, duckdb.DuckDBPyRelation):
-            if not ddb:
-                ddb = duckdb.connect()
-            return ddb.from_arrow(
-                to_polars(table).sort(by=sort_by, reverse=reverse).to_arrow()
-            )
+            sort_by_sql = sort_by_as_sql(sort_by=sort_by, ascending=ascending)
+            return table.sort(sort_by_sql)
     else:
         return table
 
@@ -159,7 +185,6 @@ def get_tables_diff(
     subset: list | None = None,
     cast_as_str: bool = False,
 ) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
-
     if not ddb:  # is None:
         ddb = duckdb.connect()
 
@@ -175,14 +200,8 @@ def get_tables_diff(
             subset_table2_ = table2_.project(
                 ",".join([f"CAST({col} as STRING) as {col}" for col in subset])
             )
-        else:
-            subset_types = None
-            subset_table1_ = table1_.project(",".join(subset))
-            subset_table2_ = table2_.project(",".join(subset))
 
-        diff_ = subset_table1_.except_(subset_table2_)  # .arrow().to_pylist()
-        if subset_types:
-            diff_ = diff_.project(
+            diff_ = subset_table1_.except_(subset_table2_).project(
                 ",".join(
                     [
                         f"CAST({col} as {type_}) as {col}"
@@ -191,12 +210,18 @@ def get_tables_diff(
                 )
             )
 
+        else:
+            subset_types = None
+            subset_table1_ = table1_.project(",".join(subset))
+            subset_table2_ = table2_.project(",".join(subset))
+
+            diff_ = subset_table1_.except_(subset_table2_)
+
         diff = to_polars(table1).filter(
             pl.struct(subset).is_in(diff_.arrow().to_pylist())
         )
 
     else:
-        print("No subset given")
         diff = table1_.except_(table2_.project(",".join(table1_.columns)))
 
     if isinstance(table1, (pa.Table, pa._dataset.Dataset)):
@@ -250,7 +275,6 @@ def distinct_table(
     presort_by: str | list | None = None,
     postsort_by: str | list | None = None,
 ) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
-
     if isinstance(table, (pa.Table, pd.DataFrame, pl.DataFrame, pa._dataset.Dataset)):
         table = to_polars(table=table)
         if presort_by:
@@ -343,3 +367,33 @@ def drop_columns(
             return table
     else:
         return table
+
+
+def sort_by_as_sql(
+    sort_by: str | List[str], ascending: bool | List[bool] | None = None
+) -> str:
+    """Generats a SQL string for the given columns.
+
+    Args:
+        sort_by (str | List[str]): Columns to sort.
+        ascending (bool | List[bool] | None, optional): Wheter to sort
+        ascending or descending. Defaults to None.
+
+    Returns:
+        str: SQL string
+    """
+    ascending = ascending or True
+    if isinstance(sort_by, list):
+        if isinstance(ascending, bool):
+            ascending = [ascending] * len(sort_by)
+
+        sort_by_ddb = [
+            f"{col} ASC" if asc else f"{col} DESC"
+            for col, asc in zip(sort_by, ascending)
+        ]
+        sort_by_ddb = ",".join(sort_by_ddb)
+
+    else:
+        sort_by_ddb = sort_by + " ASC" if ascending else sort_by + " DESC"
+
+    return sort_by_ddb
