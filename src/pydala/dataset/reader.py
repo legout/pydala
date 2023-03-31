@@ -63,7 +63,6 @@ class Reader(BaseDataSet):
         self._schema = schema
 
     def get_pyarrow_schema(self, **kwargs):
-
         # if self._format == "parquet":
         dataset = self._get_dataset(**kwargs)
         return get_unified_schema(dataset=dataset)
@@ -119,7 +118,6 @@ class Reader(BaseDataSet):
     def _load_feather(self, **kwargs):
         # if self._fs.exists(self._path):
         if self._fs.isfile(self._path):
-
             if self._use_pyarrow_fs:
                 with self._pafs.open_input_file(self._path) as f:
                     pa_table = pf.read_table(f, **kwargs)
@@ -129,7 +127,6 @@ class Reader(BaseDataSet):
                     pa_table = pf.read_table(f, **kwargs)
 
         else:
-
             if not hasattr(self, "_dataset"):
                 self.load_dataset()
 
@@ -152,7 +149,6 @@ class Reader(BaseDataSet):
 
         try:
             if self._fs.isfile(self._path):
-
                 if self._use_pyarrow_fs:
                     with self._pafs.open_input_file(self._path) as f:
                         if use_pyarrow:
@@ -166,7 +162,6 @@ class Reader(BaseDataSet):
                             pa_table = pl.read_parquet(source=f, **kwargs).to_arrow()
 
                 else:
-
                     with self._fs.open(self._path) as f:
                         if use_pyarrow:
                             pa_table = pl.read_parquet(
@@ -198,7 +193,6 @@ class Reader(BaseDataSet):
     def _load_csv(self, **kwargs):
         # if self._fs.exists(self._path):
         if self._fs.isfile(self._path):
-
             if self._use_pyarrow_fs:
                 with self._pafs.open_input_file(self._path) as f:
                     pa_table = pl.read_csv(f).to_arrow()
@@ -208,7 +202,6 @@ class Reader(BaseDataSet):
                     pa_table = pl.read_csv(f).to_arrow()
 
         else:
-
             if not hasattr(self, "_dataset"):
                 self.load_dataset()
             pa_table = self._dataset.to_table(**kwargs)
@@ -244,7 +237,6 @@ class Reader(BaseDataSet):
         self, name: str = "dataset", schema: pa.Schema | None = None, **kwargs
     ):
         if self._fs.exists(self._path):
-
             if self._caching and not self.is_cached:
                 self._to_cache()
 
@@ -336,7 +328,6 @@ class Reader(BaseDataSet):
             columns = self.dataset.schema.names
 
         if self._sort_by:  # is not None:
-
             sql += f" ORDER BY {self._sort_by_ddb}"
 
         if update:
@@ -468,7 +459,6 @@ class Reader(BaseDataSet):
             )
 
         elif self.has_temp_table:
-
             self._pd_dataframe = to_pandas(
                 self._drop_sort_distinct(
                     table=self.ddb.query(f"SELECT * FROM {self._tables['temp_table']}")

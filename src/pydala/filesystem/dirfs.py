@@ -122,7 +122,6 @@ def fsspec_dir_filesystem(
     endpoint_url: str | None = None,
     **storage_options,
 ):
-
     filesystem = filesystem or fsspec_filesystem(
         protocol=protocol, profile=profile, endpoint_url=endpoint_url, **storage_options
     )

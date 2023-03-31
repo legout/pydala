@@ -105,7 +105,6 @@ class S5CmdFileSystem(S3FileSystem):
         """Formats the json stderr."""
         stderr: str = stderr.decode().strip()
         if len(stderr) > 0:
-
             return json.loads(stderr)
         else:
             return stderr
@@ -148,11 +147,9 @@ class S5CmdFileSystem(S3FileSystem):
         return stdout
 
     def _run_command(self, operation_command: str, global_options: str | None = None):
-
         """Function runs the s5cmd operations and formats the stdout and stderr"""
 
         if self.has_s5cmd:
-
             global_options = global_options or ""
             final_command = " ".join(["s5cmd", global_options, operation_command])
             print(final_command)

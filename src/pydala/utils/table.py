@@ -12,7 +12,6 @@ def to_polars(
     | duckdb.DuckDBPyRelation
     | pa._dataset.Dataset,
 ) -> pl.DataFrame:
-
     if isinstance(table, pa.Table):
         pl_dataframe = pl.from_arrow(table)
 
@@ -38,7 +37,6 @@ def to_pandas(
     | duckdb.DuckDBPyRelation
     | pa._dataset.Dataset,
 ) -> pd.DataFrame:
-
     if isinstance(table, pa.Table):
         pd_dataframe = table.to_pandas()
 
@@ -66,23 +64,18 @@ def to_relation(
     | str,
     ddb: duckdb.DuckDBPyConnection,
 ) -> duckdb.DuckDBPyRelation:
-
     if isinstance(table, pa.Table):
-
         return ddb.from_arrow(table)
 
     elif isinstance(table, pa._dataset.Dataset):
-
         table = ddb.from_arrow(table)
 
         return table
 
     elif isinstance(table, pd.DataFrame):
-
         return ddb.from_df(table)
 
     elif isinstance(table, pl.DataFrame):
-
         return ddb.from_arrow(table.to_arrow())
 
     elif isinstance(table, str):
@@ -96,7 +89,6 @@ def to_relation(
         return table
 
     elif isinstance(table, duckdb.DuckDBPyRelation):
-
         return table
 
 
@@ -110,7 +102,6 @@ def sort_table(
     ascending: bool | list | tuple | None,
     ddb: duckdb.DuckDBPyConnection | None = None,
 ) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
-
     if sort_by:
         ascending = ascending or True
 
@@ -120,7 +111,6 @@ def sort_table(
             reverse = [not el for el in ascending]
 
         if isinstance(table, pa.Table):
-
             return to_polars(table=table).sort(by=sort_by, reverse=reverse).to_arrow()
 
         elif isinstance(table, pd.DataFrame):
@@ -159,7 +149,6 @@ def get_tables_diff(
     subset: list | None = None,
     cast_as_str: bool = False,
 ) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
-
     if not ddb:  # is None:
         ddb = duckdb.connect()
 
@@ -250,7 +239,6 @@ def distinct_table(
     presort_by: str | list | None = None,
     postsort_by: str | list | None = None,
 ) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
-
     if isinstance(table, (pa.Table, pd.DataFrame, pl.DataFrame, pa._dataset.Dataset)):
         table = to_polars(table=table)
         if presort_by:

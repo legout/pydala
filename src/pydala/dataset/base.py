@@ -38,7 +38,6 @@ class BaseDataSet(BaseFileSystem):
         log_file: str | None = None,
         log_sub_dir: str | None = None,
     ):
-
         super().__init__(
             path=path,
             bucket=bucket,

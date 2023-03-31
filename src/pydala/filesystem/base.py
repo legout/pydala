@@ -29,7 +29,6 @@ class BaseFileSystem:
         log_file: str | None = None,
         log_sub_dir: str | None = None,
     ):
-
         self._log_file = log_file
         self._log_sub_dir = log_sub_dir
 
@@ -100,7 +99,6 @@ class BaseFileSystem:
         self._cache_storage = cache_storage
 
         if self._caching:
-
             if cache_storage:  # is not None:
                 os.makedirs(cache_storage, exist_ok=True)
                 self._cache_bucket = os.path.join(cache_storage, "cache")
@@ -122,7 +120,6 @@ class BaseFileSystem:
         pyarrow_fs: FileSystem | None,
         use_pyarrow_fs: bool = False,
     ):
-
         filesystem = {}
 
         if fsspec_fs:

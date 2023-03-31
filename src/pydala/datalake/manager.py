@@ -68,7 +68,6 @@ class Manager(BaseFileSystem):
     def new(
         self, name: str | None = None, description: str | None = None, save: bool = True
     ) -> None:
-
         self.config = {}
         pydala = {
             "name": name or self._name,
@@ -147,7 +146,6 @@ class Manager(BaseFileSystem):
         )
 
         if self._fs.exists(path):
-
             if self.datasets[name].datafiles_in_root:
                 if not "name" in kwargs:
                     kwargs["name"] = name

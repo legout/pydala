@@ -102,7 +102,6 @@ def pyarrow_filesystem(
         )
 
     elif protocol.lower().startswith("gcs") or protocol.lower().startswith("gs"):
-
         endpoint_url = endpoint_url or storage_options.pop("endpoint_url", None)
         token = storage_options.pop("token", None)
         default_location = storage_options.pop("default_location", None)

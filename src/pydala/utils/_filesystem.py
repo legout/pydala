@@ -18,7 +18,6 @@ def get_filesystem(
     pyarrow_fs: FileSystem | None,
     use_pyarrow_fs: bool = False,
 ):
-
     filesystem = {}
 
     if fsspec_fs:

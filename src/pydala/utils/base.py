@@ -40,7 +40,6 @@ def get_logger(name: str, log_file: str):
 def get_ddb_sort_str(sort_by: str | list, ascending: bool | list | None = None) -> str:
     ascending = ascending or True
     if isinstance(sort_by, list):
-
         if isinstance(ascending, bool):
             ascending = [ascending] * len(sort_by)
 
@@ -122,7 +121,6 @@ def write_toml(
     filesystem: FileSystem | spec.AbstractFileSystem,
     pretty: bool = False,
 ) -> None:
-
     if not filesystem.exists(path):
         try:
             filesystem.mkdirs(path=os.path.dirname(path), exist_ok=True)

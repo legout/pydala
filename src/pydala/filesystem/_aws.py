@@ -50,9 +50,7 @@ class AwsCredentialsManager:
     def _write_credentials(
         credentials: dict[str, str], filename: str | Path, profile: str
     ) -> None:
-
         if isinstance(credentials, dict):
-
             config = configparser.ConfigParser()
             config[profile] = credentials
 
@@ -80,7 +78,6 @@ class AwsCredentialsManager:
     def _export_env(
         profile: str | None = None, credentials: dict | None = None
     ) -> None:
-
         if profile is not None:
             os.environ["AWS_PROFILE"] = profile
 

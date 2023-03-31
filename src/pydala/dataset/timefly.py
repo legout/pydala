@@ -30,7 +30,6 @@ class TimeFly(BaseFileSystem):
         log_file: str | None = None,
         log_sub_dir: str | None = None,
     ):
-
         super().__init__(
             path=path,
             bucket=bucket,
@@ -132,7 +131,6 @@ class TimeFly(BaseFileSystem):
     def new(
         self, name: str | None = None, description: str | None = None, save: bool = True
     ) -> None:
-
         if name is None:
             name = self._path.replace("/", ".")
 
@@ -171,7 +169,6 @@ class TimeFly(BaseFileSystem):
         batch_size: int | str | None = None,
         comment: str = None,
     ):
-
         if self.datafiles_in_root:
             format = self.get_format()
             self._mv(self._path, os.path.join(self._path, "current"), format=format)
@@ -314,7 +311,6 @@ class TimeFly(BaseFileSystem):
 
     @log_decorator()
     def delete_snapshot(self, snapshot: str) -> None:
-
         path = os.path.join(self._path, "snapshot", snapshot)
         if self._fs.exists(path):
             self._rm(path=path)
@@ -339,7 +335,6 @@ class TimeFly(BaseFileSystem):
             return self._config["snapshot"]["deleted"]
 
     def _find_snapshot_subpath(self, timefly: dt.datetime | None):
-
         if timefly is not None:
             available_snapshots = sorted(
                 map(
