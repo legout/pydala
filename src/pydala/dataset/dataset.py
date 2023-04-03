@@ -4,13 +4,14 @@ import duckdb
 import pandas as pd
 import polars as pl
 import pyarrow as pa
-import pyarrow.parquet as pq
 import pyarrow.dataset as pds
+import pyarrow.parquet as pq
 from fsspec import filesystem as fsspec_filesystem
 from fsspec.implementations import dirfs
 from fsspec.spec import AbstractFileSystem
 from fsspec.utils import infer_storage_options
-from ..utils.base import run_parallel
+
+from ..utils.base import run_parallel, humanize_size
 
 from ..utils.dataset import unify_schema, sort_schema, convert_schema
 
@@ -24,7 +25,6 @@ class BaseDataset:
         format: str = "parquet",
         filesystem: AbstractFileSystem | None = None,
         partitioning: pds.Partitioning | list | str | None = None,
-        exclude_invalid_files: bool = True,
         ddb: duckdb.DuckDBPyConnection | None = None,
         **storage_options,
     ):
@@ -41,7 +41,6 @@ class BaseDataset:
 
         self._format = format
         self._partitioning = partitioning
-        self._exclude_invalid_files = exclude_invalid_files
         self._schema = schema
         self._ddb = (
             ddb if isinstance(ddb, duckdb.DuckDBPyConnection) else duckdb.connect()
@@ -58,12 +57,16 @@ class BaseDataset:
             else:
                 self._dir_filesystem = self._filesystem
 
+        self._get_file_details()
+
+    def _get_file_details(self):
         self._files = dict()
         self._files["path"] = self._dir_filesystem.glob(
-            self._path + f"/**.{format.replace('.','')}"
+            self._path + f"/**.{self._format.replace('.','')}"
         )
         self._files["name"] = {f: os.path.basename(f) for f in self._files["path"]}
         self._files["size"] = self._dir_filesystem.du(self._path, total=False)
+
         self._files["last_modified"] = {
             f: self._dir_filesystem.modified(f) for f in self._files["path"]
         }
@@ -75,6 +78,7 @@ class BaseDataset:
         self.files.index.names = ["path"]
         self.files = pl.from_pandas(self.files.reset_index())
         self.size = self.files["size"].sum()
+        self.size_h = humanize_size(self.size)
 
 
 class ParquetDataset(BaseDataset):
@@ -86,7 +90,6 @@ class ParquetDataset(BaseDataset):
         format: str = "parquet",
         filesystem: AbstractFileSystem | None = None,
         partitioning: pds.Partitioning | list | str | None = None,
-        exclude_invalid_files: bool = True,
         ddb: duckdb.DuckDBPyConnection | None = None,
         **storage_options,
     ):
@@ -97,7 +100,6 @@ class ParquetDataset(BaseDataset):
             format=format,
             filesystem=filesystem,
             partitioning=partitioning,
-            exclude_invalid_files=exclude_invalid_files,
             ddb=ddb,
             **storage_options,
         )
@@ -110,6 +112,20 @@ class ParquetDataset(BaseDataset):
             _read_schema, self._files["path"], self._dir_filesystem
         )
         return {f: schema for f, schema in pa_schemas}
+
+    def _get_unified_schema(self):
+        # if not hasattr(self, "_pa_schemas"):
+        #    self._get_pa_schemas()
+
+        schemas_equal = True
+        all_schemas = list(self.pa_schemas.values())
+        unified_schema = all_schemas[0]
+        for schema in all_schemas[1:]:
+            unified_schema, schemas_equal_ = unify_schema(unified_schema, schema)
+
+            schemas_equal *= schemas_equal_
+
+        return unified_schema, schemas_equal_
 
     @property
     def pa_schemas(self):
@@ -129,20 +145,6 @@ class ParquetDataset(BaseDataset):
     @property
     def schemas(self):
         return self.pa_schemas
-
-    def _get_unified_schema(self):
-        # if not hasattr(self, "_pa_schemas"):
-        #    self._get_pa_schemas()
-
-        schemas_equal = True
-        all_schemas = list(self.pa_schemas.values())
-        unified_schema = all_schemas[0]
-        for schema in all_schemas[1:]:
-            unified_schema, schemas_equal_ = unify_schema(unified_schema, schema)
-
-            schemas_equal *= schemas_equal_
-
-        return unified_schema, schemas_equal_
 
     @property
     def pa_schema(self):
@@ -182,6 +184,11 @@ class ParquetDataset(BaseDataset):
     @property
     def schema_sorted(self):
         return self.pa_schema_sorted
+
+    def repair_schemas(self):
+        for schema in self.schemas:
+            if schema != self.schema:
+                pass
 
 
 # TODO:

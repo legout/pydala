@@ -4,7 +4,7 @@ import duckdb
 import polars as pl
 import pyarrow as pa
 
-from ..utils.base import run_parallel
+# from ..utils.base import run_parallel
 
 
 def _unify_schema_pyarrow(schema1: pa.Schema, schema2: pa.Schema) -> Tuple[dict, bool]:
@@ -19,7 +19,7 @@ def _unify_schema_pyarrow(schema1: pa.Schema, schema2: pa.Schema) -> Tuple[dict,
     """
 
     dtype_rank = [
-        pa.null()
+        pa.null(),
         pa.int8(),
         pa.int16(),
         pa.int32(),
@@ -259,7 +259,7 @@ def convert_schema(schema: pa.Schema | dict) -> dict | pa.Schema:
 def sync_datasets(dataset1, dataset2, delete=True):
     def transfer_file(f):
         with dataset2._dir_filesystem.open(f, "wb") as ff:
-            ff.write(dataset1.read_bytes(f))
+            ff.write(dataset1._dir_filesystem.read_bytes(f))
 
     def delete_file(f):
         dataset2._dir_filesystem.rm(f)
@@ -268,7 +268,7 @@ def sync_datasets(dataset1, dataset2, delete=True):
         dataset1.files.select(["path", "name", "size"]).to_arrow()
     ).except_(
         duckdb.from_arrow(dataset2.files.select(["path", "name", "size"]).to_arrow())
-    )
+    ).pl()["path"].to_list()
 
     _ = run_parallel(transfer_file, new_files)
 
