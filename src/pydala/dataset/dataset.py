@@ -59,7 +59,7 @@ class BaseDataset:
 
         self._get_file_details()
 
-    def _get_file_details(self):
+    def _get_file_details(self) -> None:
         self._files = dict()
         self._files["path"] = self._dir_filesystem.glob(
             self._path + f"/**.{self._format.replace('.','')}"
