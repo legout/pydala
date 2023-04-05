@@ -7,29 +7,6 @@ from typing import List, Tuple, Callable, Any
 from joblib import Parallel, delayed
 
 
-def get_logger(name: str, log_file: str):
-    logger
-    logger.setLevel(logging.INFO)
-
-    formatter = logging.Formatter(
-        "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
-    )
-
-    stdout_handler = logging.StreamHandler(sys.stdout)
-    stdout_handler.setLevel(logging.INFO)
-
-    file_handler = handlers.TimedRotatingFileHandler(
-        log_file, when="D", interval=1, backupCount=2
-    )
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(formatter)
-
-    logger.addHandler(stdout_handler)
-    logger.addHandler(file_handler)
-
-    return logger
-
-
 def sort_as_sql(
     sort_by: str | List[str], ascending: bool | List[bool] | None = None
 ) -> str:
@@ -68,17 +45,17 @@ def random_id() -> str:
 
 def humanize_size(size: int, unit="MB") -> float:
     "Human-readable size"
-    if unit == "B":
+    if unit.lower() == "b":
         return round(size, 1)
-    elif unit == "KB":
+    elif unit.lower() == "kb":
         return round(size / 1024, 1)
-    elif unit == "MB":
+    elif unit.lower() == "mb":
         return round(size / 1024**2, 1)
-    elif unit == "GB":
+    elif unit.lower() == "gb":
         return round(size / 1024**3, 1)
-    elif unit == "TB":
+    elif unit.lower() == "tb":
         return round(size / 1024**4, 1)
-    elif unit == "PB":
+    elif unit.lower() == "pb":
         return round(size / 1024**5, 1)
 
 
@@ -89,7 +66,7 @@ def run_parallel(
     n_jobs: int = -1,
     backend: str = "loky",
     **kwargs,
-)->List[Any]:
+) -> List[Any]:
     """Runs a function for a list of parameters in parallel.
 
     Args:

@@ -2,7 +2,36 @@ import duckdb
 import pandas as pd
 import polars as pl
 import pyarrow as pa
-from typing import List, Tuple
+from typing import List, Tuple, Dict
+
+
+def to_arrow(
+    table: pa.Table
+    | pd.DataFrame
+    | pl.DataFrame
+    | duckdb.DuckDBPyRelation
+    | pa._dataset.Dataset,
+) -> pl.DataFrame:
+    """Converts a polars dataframe, pandas dataframe or duckdb relation
+    into a pyarrow table/dataset.
+    """
+
+    if isinstance(table, pl.DataFrame()):
+        pa_table = table.to_arrow()
+
+    elif isinstance(table, pd.DataFrame):
+        pa_table = pa.Table.from_pandas(table)
+
+    elif isinstance(table, pa._dataset.Dataset):
+        pa_table = table
+
+    elif isinstance(table, duckdb.DuckDBPyRelation):
+        pa_table = table.arrow()
+
+    else:
+        pa_table = table
+
+    return pa_table
 
 
 def to_polars(
@@ -245,23 +274,6 @@ def get_tables_diff(
         else:
             return diff.arrow()
 
-    # if type(table1) != type(table2):
-    #    raise TypeError
-
-    # else:
-    #     if isinstance(table1, pa.Table):
-    #         return ddb.from_arrow(table1).except_(ddb.from_arrow(table2)).arrow()
-    #     elif isinstance(table1, pd.DataFrame):
-    #         return ddb.from_df(table1).except_(ddb.from_df(table2)).df()
-    #     elif isinstance(table1, pl.DataFrame):
-    #         return pl.concat([table1.with_row_count(), table2.with_row_count()]).filter(
-    #             pl.count().over(table1.columns) == 1
-    #         )
-    #     elif isinstance(table1, str):
-    #         return ddb.execute(
-    #             f"SELECT * FROM {table1} EXCEPT SELECT * FROM {table2}"
-    #         ).arrow()
-
 
 def distinct_table(
     table: pa.Table
@@ -397,3 +409,41 @@ def sort_by_as_sql(
         sort_by_ddb = sort_by + " ASC" if ascending else sort_by + " DESC"
 
     return sort_by_ddb
+
+
+def sort_and_distinct(
+    table: pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation,
+    by: str | List[str] | None = None,
+    distinct: bool = False,
+    subset: str | List[str] | None = None,
+) -> pa.Table:
+    table = to_polars(table).lazy()
+
+    if by is not None:
+        table = table.sort(by)
+
+    if distinct:
+        table = table.distinct(subset=subset)
+
+    return table.collect().arrow()
+
+
+def to_batches(
+    table: pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation,
+    batch_size: int | None = None,
+    group_by_datetime: Dict[str, str] | None = None,
+) -> pa.Table:
+    table = to_polars(table)
+    if batch_size is not None:
+        return [
+            table.slice(idx, batch_size)
+            for idx in range(table.shape[0] // batch_size + 1)
+        ]
+    elif group_by_datetime is not None:
+        col, strftime = list(group_by_datetime.items())[0]
+        return [
+            t.select(pl.all().exclude("_group_"))
+            for t in table.with_column(
+                pl.col(col).dt.strftime(strftime).alias("_group_")
+            ).partition_by("_group_")
+        ]
