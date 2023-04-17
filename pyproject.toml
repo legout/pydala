@@ -1,10 +1,10 @@
 [tool.poetry]
 name = "pydala"
-version = "0.1.7"
+version = "0.2.0"
 description = "Poor man's simple python api for creating a local or remote datalake based on several (pyarrow) datasets using duckdb"
 authors = ["Volker Lorrmann <volker.lorrmann@gmail.com>"]
 readme = "README.md"
-packages = [{include = "pydala", from = "src"}]
+packages = [{ include = "pydala", from = "src" }]
 
 [tool.poetry.dependencies]
 python = "^3.10"
@@ -34,7 +34,7 @@ gitchangelog = "*"
 mkdocs = "*"
 pre-commit = "*"
 poetry-dynamic-versioning = "*"
-mkdocstrings = {extras = ["python"], version = "^0.19.0"}
+mkdocstrings = { extras = ["python"], version = "^0.19.0" }
 mkdocs-material = "*"
 mkdocs-gen-files = "*"
 mkdocs-literate-nav = "*"

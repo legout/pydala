@@ -5,6 +5,7 @@ import sys
 from loguru import logger
 from typing import List, Tuple, Callable, Any
 from joblib import Parallel, delayed
+import tqdm
 
 
 def sort_as_sql(
@@ -22,7 +23,7 @@ def sort_as_sql(
     """
     if ascending is None:
         ascending = True
-        
+
     if isinstance(sort_by, list):
         if isinstance(ascending, bool):
             ascending = [ascending] * len(sort_by)
@@ -67,6 +68,7 @@ def run_parallel(
     *args,
     n_jobs: int = -1,
     backend: str = "loky",
+    verbose: bool = True,
     **kwargs,
 ) -> List[Any]:
     """Runs a function for a list of parameters in parallel.
@@ -81,6 +83,12 @@ def run_parallel(
     Returns:
         List[Any]: function output.
     """
-    return Parallel(n_jobs=n_jobs, backend=backend)(
-        delayed(func)(fp, *args, **kwargs) for fp in func_params
-    )
+    if verbose:
+        return Parallel(n_jobs=n_jobs, backend=backend)(
+            delayed(func)(fp, *args, **kwargs) for fp in tqdm.tqdm(func_params)
+        )
+
+    else:
+        return Parallel(n_jobs=n_jobs, backend=backend)(
+            delayed(func)(fp, *args, **kwargs) for fp in func_params
+        )

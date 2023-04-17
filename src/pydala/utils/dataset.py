@@ -18,13 +18,12 @@ def get_pa_schemas(dataset: pa.dataset.Dataset) -> Dict[str, pa.Schema]:
     pa_schemas = run_parallel(
         _get_physical_schema, dataset.get_fragments(), backend="threading"
     )
-    return dict(zip(pa_schemas))
+    return dict(pa_schemas)
 
 
 def get_unified_schema(
     schemas: List[pa.Schema] | Dict[str, pa.Schema]
 ) -> Tuple[pa.Schema, bool]:
-
     schemas_equal = True
     all_schemas = list(schemas.values()) if isinstance(schemas, dict) else schemas
     unified_schema = all_schemas[0]
