@@ -32,18 +32,15 @@ def _unify_schema_pyarrow(schema1: pa.Schema, schema2: pa.Schema) -> Tuple[dict,
         if schema1.types == schema2.types:
             return schema1, True
 
-        else:
-            schemas_equal = False
-            all_names = schema1.names
+        all_names = schema1.names
 
     elif sorted(schema1.names) == sorted(schema2.names):
-        schemas_equal = False
         all_names = sorted(schema1.names)
 
     else:
-        schemas_equal = False
         all_names = sorted(set(schema1.names + schema2.names))
 
+    schemas_equal = False
     unified_schema = []
     for name in all_names:
         if name in schema1.names:
@@ -57,15 +54,8 @@ def _unify_schema_pyarrow(schema1: pa.Schema, schema2: pa.Schema) -> Tuple[dict,
 
         if type1 != type2:
             schemas_equal = False
-            if type1 in dtype_rank:
-                rank1 = dtype_rank.index(type1)
-            else:
-                rank1 = 0
-            if type2 in dtype_rank:
-                rank2 = dtype_rank.index(type2)
-            else:
-                rank2 = 0
-
+            rank1 = dtype_rank.index(type1) if type1 in dtype_rank else 0
+            rank2 = dtype_rank.index(type2) if type2 in dtype_rank else 0
             unified_schema.append(pa.field(name, type1 if rank1 > rank2 else type2))
 
         else:
@@ -98,40 +88,23 @@ def _unify_schema_polars(schema1: dict, schema2: dict) -> Tuple[dict, bool]:
         if list(schema1.values()) == list(schema2.values()):
             return schema1, True
 
-        else:
-            schemas_equal = False
-            all_names = list(schema1.keys())
+        all_names = list(schema1.keys())
 
     elif sorted(schema1.keys()) == sorted(schema2.keys()):
-        schemas_equal = False
         all_names = sorted(schema1.keys())
 
     else:
-        schemas_equal = False
         all_names = sorted(set(list(schema1.keys()) + list(schema2.keys())))
 
-    unified_schema = dict()
+    schemas_equal = False
+    unified_schema = {}
     for name in all_names:
-        if name in schema1:
-            type1 = schema1[name]
-        else:
-            type1 = schema2[name]
-        if name in schema2:
-            type2 = schema2[name]
-        else:
-            type2 = schema1[name]
-
+        type1 = schema1.get(name, schema2[name])
+        type2 = schema2.get(name, schema1[name])
         if type1 != type2:
             schemas_equal = False
-            if type1 in dtype_rank:
-                rank1 = dtype_rank.index(type1)
-            else:
-                rank1 = 0
-            if type2 in dtype_rank:
-                rank2 = dtype_rank.index(type2)
-            else:
-                rank2 = 0
-
+            rank1 = dtype_rank.index(type1) if type1 in dtype_rank else 0
+            rank2 = dtype_rank.index(type2) if type2 in dtype_rank else 0
             unified_schema[name] = type1 if rank1 > rank2 else type2
 
         else:
@@ -173,12 +146,11 @@ def _sort_schema_polars(schema: dict) -> dict:
 
 
 def sort_schema(schema: pa.Schema | dict) -> pa.Schema | dict:
-    sorted_schema = (
+    return (
         _sort_schema_pyarrow(schema)
         if isinstance(schema, pa.Schema)
         else _sort_schema_polars(schema)
     )
-    return sorted_schema
 
 
 def _convert_dtype_polars_to_pyarrow(dtype: pl.DataType) -> pa.lib.DataType:

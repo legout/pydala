@@ -20,7 +20,9 @@ def sort_as_sql(
     Returns:
         str: SQL string
     """
-    ascending = ascending or True
+    if ascending is None:
+        ascending = True
+        
     if isinstance(sort_by, list):
         if isinstance(ascending, bool):
             ascending = [ascending] * len(sort_by)
@@ -32,7 +34,7 @@ def sort_as_sql(
         sort_by_ddb = ",".join(sort_by_ddb)
 
     else:
-        sort_by_ddb = sort_by + " ASC" if ascending else sort_by + " DESC"
+        sort_by_ddb = f"{sort_by} ASC" if ascending else f"{sort_by} DESC"
 
     return sort_by_ddb
 
@@ -79,7 +81,6 @@ def run_parallel(
     Returns:
         List[Any]: function output.
     """
-    res = Parallel(n_jobs=n_jobs, backend=backend)(
+    return Parallel(n_jobs=n_jobs, backend=backend)(
         delayed(func)(fp, *args, **kwargs) for fp in func_params
     )
-    return res
