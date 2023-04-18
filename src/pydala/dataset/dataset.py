@@ -307,13 +307,7 @@ class Dataset(BaseDataset):
             timestamp_columns = [
                 col.name
                 for col in self._basedataset.schema
-                if col.type
-                in [
-                    pa.timestamp("ns"),
-                    pa.timestamp("us"),
-                    pa.timestamp("ms"),
-                    pa.timestamp("s"),
-                ]
+                if isinstance(col.type, pa.TimestampType)
             ]
             self._timestamp_column = timestamp_columns[0]
 
@@ -437,11 +431,9 @@ class Dataset(BaseDataset):
             **kwargs,
         )
 
-        self.ddb.register(
+        self.register(
             f"{self.name}.pa_dataset", self._pa_dataset
-        ) if self.name else self.ddb.register(
-            f"{self.name}.pa_dataset", self._pa_dataset
-        )
+        ) if self.name else self.register(f"pa_dataset", self._pa_dataset)
 
     def load_pa_table(
         self,
@@ -496,15 +488,18 @@ class Dataset(BaseDataset):
                 )
             )
 
-        self._pa_table = table
+        self._pa_table = table.combine_chunks()
         # self._ddb_rel = self.ddb.from_arrow(self._pa_table)
 
-        self.ddb.register(
+        self.register(
             f"{self.name}.pa_table", self._pa_table
-        ) if self.name else self.ddb.register(f"{self.name}.pa_table", self._pa_table)
+        ) if self.name else self.register(f"pa_table", self._pa_table)
 
     def sql(self, sql: str):
         return self.ddb.sql(sql)
+
+    def register(self, name: str, py_obj: object):
+        self.ddb.register(name, py_obj)
 
     @property
     def pa_dataset(self):
@@ -515,7 +510,13 @@ class Dataset(BaseDataset):
     @property
     def pa_table(self):
         if not hasattr(self, "_pa_table"):
-            self.load_pa_table()
+            if hasattr(self, "_pa_dataset"):
+                if not isinstance(self._pa_dataset, pa._dataset.FileSystemDataset):
+                    self._pa_table = self._pa_dataset.to_table()
+                else:
+                    self.load_pa_table()
+            else:
+                self.load_pa_table()
         return self._pa_table
 
     @property
@@ -544,6 +545,15 @@ class Dataset(BaseDataset):
         if not hasattr(self, "_pl_scan"):
             self._pl_scan = pl.scan_pyarrow_dataset(self.pa_dataset)
         return self._pl_scan
+
+    @property
+    def df(self):
+        if not hasattr(self, "_df"):
+            if hasattr(self, "_pa_table"):
+                self._df = self._pa_table.to_pandas()
+            else:
+                self._df = self.ddb_rel.df()
+        return self._df
 
     def create_ddb_table(self, temp: bool = False):
         temp = "temp" if temp else ""
@@ -582,9 +592,19 @@ class Dataset(BaseDataset):
         subset: str | List[str] | None = None,
         keep: str = "first",
         presort: bool = False,
+        as_: str | None = None,  # options are "polars", "arrow", "duckdb", "pandas"
     ):
+        if as_ == "polars":
+            table_ = self.pl
+        elif as_ == "arrow":
+            table_ = self.pa_table
+        elif as_ == "pandas":
+            table_ = self.df
+        else:
+            table_ = self.ddb_rel
+
         res = partition_by(
-            self._pa_table if hasattr(self, "_pa_table") else self.ddb_rel,
+            table_,
             self._timestamp_column,
             columns=columns,
             strftime=strftime,
@@ -599,7 +619,7 @@ class Dataset(BaseDataset):
             keep=keep,
             presort=presort,
         )
-        return dict(res) if as_dict else list(res)
+        return res  # dict(res) if as_dict else list(res)
 
     def iter_batches(
         self,
@@ -613,13 +633,12 @@ class Dataset(BaseDataset):
         subset: str | List[str] | None = None,
         keep: str = "first",
         presort: bool = False,
+        as_: str | None = None,
     ):
         if file_size:
             batch_size = self._estimate_batch_size(file_size=file_size)
 
-        yield from partition_by(
-            self.ddb_rel,
-            self._timestamp_column,
+        yield from self.partition_by(
             strftime=partition_by_strftime,
             timedelta=partition_by_timedelta,
             n_rows=batch_size,
@@ -631,7 +650,36 @@ class Dataset(BaseDataset):
             subset=subset,
             keep=keep,
             presort=presort,
+            as_=as_,
         )
+
+    def add(self, table):
+        if isinstance(table, list | tuple):
+            table = pa.concat_tables(
+                [to_arrow(table_) for table_ in table], promote=True
+            )
+        else:
+            table = to_arrow(table)
+
+        if not hasattr(self, "_pa_dataset"):
+            self._pa_dataset = pds.dataset(table)
+        else:
+            self._pa_dataset = pds.dataset([self._pa_dataset, pds.dataset(table)])
+
+        self.register(
+            f"{self.name}.pa_dataset", self._pa_dataset
+        ) if self.name else self.register("pa_dataset", self._pa_dataset)
+
+        if hasattr(self, "_pa_table"):
+            self._pa_table = pa.concat_tables([self._pa_table, table], promote=True)
+            self.register(
+                f"{self.name}.pa_table", self._pa_table
+            ) if self.name else self.register("pa_table", self._pa_table)
+
+        if hasattr(self, "_pl"):
+            self._pl = pl.from_arrow(self._pa_table)
+        if hasattr(self, "_df"):
+            self._df = self._pa_table.to_pandas()
 
     # def write(
     #     table: Union[pa.Table, pd.DataFrame, pl.DataFrame, duckdb.DuckDBPyRelation]
