@@ -11,7 +11,7 @@ from .base import run_parallel
 from .schema import unify_schema
 
 
-def get_pa_schemas(dataset: pa.dataset.Dataset) -> Dict[str, pa.Schema]:
+def get_arrow_schema(dataset: pa.dataset.Dataset) -> Dict[str, pa.Schema]:
     def _get_physical_schema(frag):
         return frag.path, frag.physical_schema
 
@@ -59,14 +59,14 @@ def get_file_details(
     def _get_count_rows(frag):
         return frag.path, frag.count_rows()
 
-    details["count_rows"] = dict(
+    details["row_count"] = dict(
         run_parallel(_get_count_rows, dataset.get_fragments(), backend="threading")
     )
 
     details = pd.concat(
         [
             pd.Series(details[k]).rename(k)
-            for k in ["name", "size", "last_modified", "count_rows"]
+            for k in ["name", "size", "last_modified", "row_count"]
         ],
         axis=1,
     )

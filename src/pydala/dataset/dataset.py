@@ -19,8 +19,14 @@ from fsspec.utils import infer_storage_options
 
 from ..utils.base import humanize_size, run_parallel, random_id
 from ..utils.schema import convert_schema, sort_schema, unify_schema
-from ..utils.table import to_arrow, sort_table, distinct_table, partition_by
-from ..utils.dataset import get_pa_schemas, get_unified_schema, get_file_details
+from ..utils.table import (
+    to_arrow,
+    sort_table,
+    distinct_table,
+    partition_by,
+    get_table_delta,
+)
+from ..utils.dataset import get_arrow_schema, get_unified_schema, get_file_details
 
 
 class BaseDataset:
@@ -64,9 +70,19 @@ class BaseDataset:
         else:
             self._schema = None
 
-        self._timestamp_column = timestamp_column
         self._set_filesystem(filesystem=filesystem, **storage_options)
         self._set_basedataset()
+
+        self._timestamp_column = timestamp_column
+        if self._timestamp_column is None:
+            timestamp_columns = [
+                col.name
+                for col in self._basedataset.schema
+                if isinstance(col.type, pa.TimestampType)
+            ]
+            self._timestamp_column = timestamp_columns[0]
+
+        self._set_file_details()
 
     def _check_path_exists(self):
         self._path_exists = self._dir_filesystem.exists(self._path)
@@ -91,7 +107,7 @@ class BaseDataset:
         else:
             self._dir_filesystem = self._filesystem
 
-        self._pa_filesystem = pafs.PyFileSystem(
+        self._arrow_filesystem = pafs.PyFileSystem(
             pafs.FSSpecHandler(self._dir_filesystem)
         )
 
@@ -103,11 +119,32 @@ class BaseDataset:
                 format=self._format,
                 filesystem=self._dir_filesystem,
                 partitioning=self._partitioning,
-                schema=self._pa_schema if hasattr(self, "_pa_schema") else self._schema,
+                schema=self._arrow_schema
+                if hasattr(self, "_arrow_schema")
+                else self._schema,
             )
-            self._select_files = self._basedataset.files
+            self.selected_batches = self._basedataset.files
         else:
             self._basedataset = None
+
+    def _set_file_details(self):
+        self._check_path_exists()
+        if not self._path_empty:
+            self.file_details = get_file_details(
+                self._basedataset,
+                timestamp_column=self._timestamp_column,
+                filesystem=self._dir_filesystem,
+            )
+
+            self.size = self.file_details["size"].sum()
+            self.size_h = humanize_size(self.size, unit="MB")
+
+            self.selected_file_details = self.file_details
+        else:
+            self.file_details = None
+            self.selected_file_details = None
+            self.size = 0
+            self.size_h = 0
 
     @staticmethod
     def _read_file(
@@ -159,15 +196,15 @@ class BaseDataset:
                 pf.write_feather(f, compression=compression, **kwargs)
 
     @property
-    def pa_schemas(self):
+    def arrow_schemas(self):
         if self._basedataset is None:
             self._set_basedataset()
             if self._basedataset:
                 return None
-        if not hasattr(self, "_pa_schemas"):
-            self._pa_schemas = get_pa_schemas(self._basedataset)
+        if not hasattr(self, "_arrow_schemas"):
+            self._arrow_schemas = get_arrow_schema(self._basedataset)
 
-        return self._pa_schemas
+        return self._arrow_schemas
 
     @property
     def pl_schemas(self):
@@ -177,24 +214,26 @@ class BaseDataset:
                 return None
         if not hasattr(self, "_pl_schemas"):
             self._pl_schemas = {
-                f: convert_schema(schema) for f, schema in self.pa_schemas
+                f: convert_schema(schema) for f, schema in self.arrow_schemas
             }
         return self._pl_schemas
 
     @property
     def schemas(self):
-        return self.pa_schemas
+        return self.arrow_schemas
 
     @property
-    def pa_schema(self):
+    def arrow_schema(self):
         if self._basedataset is None:
             self._set_basedataset()
             if self._basedataset:
                 return None
-        if not hasattr(self, "_pa_schema"):
-            self._pa_schema, self._schemas_equal = get_unified_schema(self.pa_schemas)
+        if not hasattr(self, "_arrow_schema"):
+            self._arrow_schema, self._schemas_equal = get_unified_schema(
+                self.arrow_schemas
+            )
 
-        return self._pa_schema
+        return self._arrow_schema
 
     @property
     def pl_schema(self):
@@ -203,30 +242,32 @@ class BaseDataset:
             if self._basedataset:
                 return None
         if not hasattr(self, "_pl_schema"):
-            self._pl_schema = convert_schema(self.pa_schema)
+            self._pl_schema = convert_schema(self.arrow_schema)
         return self._pl_schema
 
     @property
     def schema(self):
-        return self.pa_schema
+        return self.arrow_schema
 
     @property
     def schemas_equal(self):
         if self._basedataset is None:
             return None
         if not hasattr(self, "_schemas_equal"):
-            self._pa_schema, self._schemas_equal = get_unified_schema(self.pa_schemas)
+            self._arrow_schema, self._schemas_equal = get_unified_schema(
+                self.arrow_schemas
+            )
         return self._schemas_equal
 
     @property
-    def pa_schema_sorted(self):
+    def arrow_schema_sorted(self):
         if self._basedataset is None:
             self._set_basedataset()
             if self._basedataset:
                 return None
-        if not hasattr(self, "_pa_schema_sorted"):
-            self._pa_schema_sorted = sort_schema(self.pa_schema)
-        return self._pa_schema_sorted
+        if not hasattr(self, "_arrow_schema_sorted"):
+            self._arrow_schema_sorted = sort_schema(self.arrow_schema)
+        return self._arrow_schema_sorted
 
     @property
     def pl_schema_sorted(self):
@@ -240,20 +281,20 @@ class BaseDataset:
 
     @property
     def schema_sorted(self):
-        return self.pa_schema_sorted
+        return self.arrow_schema_sorted
 
     def repair_schema(self):
         def _repair_schema(path):
             schema = self.schemas[path]
             if schema != self.schema:
                 table = self._read_file(
-                    path=path, schema=self.schema, filesystem=self._pa_filesystem
+                    path=path, schema=self.schema, filesystem=self._arrow_filesystem
                 )
                 self._write_file(
                     table=table,
                     path=path,
                     # schema=self.schema,
-                    filesystem=self._pa_filesystem,
+                    filesystem=self._arrow_filesystem,
                 )
 
         if self.schemas_equal:
@@ -264,13 +305,13 @@ class BaseDataset:
         #     schema = self.schemas[path]
         #     if schema != self.schema:
         #         table = self._read_file(
-        #             path=path, schema=self.schema, filesystem=self._pa_filesystem
+        #             path=path, schema=self.schema, filesystem=self._arrow_filesystem
         #         )
         #         self._write_file(
         #             table=table,
         #             path=path,
         #             # schema=self.schema,
-        #             filesystem=self._pa_filesystem,
+        #             filesystem=self._arrow_filesystem,
         #         )
 
 
@@ -300,37 +341,8 @@ class Dataset(BaseDataset):
             name=name,
             **storage_options,
         )
-        self._set_basedataset()
-        self._set_file_details()
 
-        if self._timestamp_column is None:
-            timestamp_columns = [
-                col.name
-                for col in self._basedataset.schema
-                if isinstance(col.type, pa.TimestampType)
-            ]
-            self._timestamp_column = timestamp_columns[0]
-
-    def _set_file_details(self):
-        self._check_path_exists()
-        if not self._path_empty:
-            self.file_details = get_file_details(
-                self._basedataset,
-                timestamp_column=self._timestamp_column,
-                filesystem=self._dir_filesystem,
-            )
-
-            self.size = self.file_details["size"].sum()
-            self.size_h = humanize_size(self.size, unit="MB")
-
-            self.selected_file_details = self.file_details
-        else:
-            self.file_details = None
-            self.selected_file_details = None
-            self.size = 0
-            self.size_h = 0
-
-    def filter_file_details(
+    def select_batches(
         self,
         start_time: dt.datetime | str | None = None,
         end_time: dt.datetime | str | None = None,
@@ -338,8 +350,8 @@ class Dataset(BaseDataset):
         max_file_size: int | str | None = None,
         min_last_modified: dt.datetime | str | None = None,
         max_last_modified: dt.datetime | str | None = None,
-        min_count_rows: int | None = None,
-        max_count_rows: int | None = None,
+        min_row_counts: int | None = None,
+        max_row_counts: int | None = None,
     ):
         self._check_path_exists()
 
@@ -351,46 +363,63 @@ class Dataset(BaseDataset):
             self._set_file_details()
 
         file_details = self.file_details
+        filter_ = []
+        # if start_time is not None:
+        #     if isinstance(start_time, str):
+        #         start_time = dt.datetime.fromisoformat(start_time)
+        #     file_details = file_details.filter(pl.col("timestamp_max") >= start_time)
+        if start_time:
+            filter_.append(f"timestamp_max>='{start_time}'")
+        # if end_time is not None:
+        #     if isinstance(end_time, str):
+        #         end_time = dt.datetime.fromisoformat(end_time)
+        #     file_details = file_details.filter(pl.col("timestamp_min") <= end_time)
+        if end_time:
+            filter_.append(f"timestamp_min<='{end_time}'")
+        # if min_file_size is not None:
+        #     file_details = file_details.filter(pl.col("size") >= min_file_size)
+        if min_file_size:
+            filter_.append(f"size>={min_file_size}")
+        # if max_file_size is not None:
+        #     file_details = file_details.filter(pl.col("size") <= max_file_size)
+        if max_file_size:
+            filter_.append(f"size<={max_file_size}")
+        # if min_last_modified is not None:
+        #     if isinstance(min_last_modified, str):
+        #         min_last_modified = dt.datetime.fromisoformat(min_last_modified)
+        #     file_details = file_details.filter(
+        #         pl.col("last_modified") >= min_last_modified
+        #     )
+        if min_last_modified:
+            filter_.append(f"last_modified>='{min_last_modified}'")
 
-        if start_time is not None:
-            if isinstance(start_time, str):
-                start_time = dt.datetime.fromisoformat(start_time)
-            file_details = file_details.filter(pl.col("timestamp_max") >= start_time)
+        # if max_last_modified is not None:
+        #     if isinstance(max_last_modified, str):
+        #         max_last_modified = dt.datetime.fromisoformat(max_last_modified)
+        #     file_details = file_details.filter(
+        #         pl.col("last_modified") <= max_last_modified
+        #     )
+        if max_last_modified:
+            filter_.append(f"last_modified<='{max_last_modified}'")
 
-        if end_time is not None:
-            if isinstance(end_time, str):
-                end_time = dt.datetime.fromisoformat(end_time)
-            file_details = file_details.filter(pl.col("timestamp_min") <= end_time)
+        # if min_row_counts is not None:
+        #     file_details = file_details.filter(pl.col("conunt_rows") >= min_row_counts)
+        if min_row_counts:
+            filter_.append(f"row_counts>={min_row_counts}")
+        # if max_row_counts is not None:
+        #     file_details = file_details.filter(pl.col("row_counts") <= max_row_counts)
+        if max_row_counts:
+            filter_.append(f"row_counts<={max_row_counts}")
 
-        if min_file_size is not None:
-            file_details = file_details.filter(pl.col("size") >= min_file_size)
-
-        if max_file_size is not None:
-            file_details = file_details.filter(pl.col("size") <= max_file_size)
-
-        if min_last_modified is not None:
-            if isinstance(min_last_modified, str):
-                min_last_modified = dt.datetime.fromisoformat(min_last_modified)
-            file_details = file_details.filter(
-                pl.col("last_modified") >= min_last_modified
+        if len(filter_) > 0:
+            self.selected_file_details = (
+                self.ddb.sql("FROM file_details").filter(" AND ".join(filter_)).pl()
             )
+        else:
+            self.selected_file_details = file_details
+        self.selected_batches = self.selected_file_details["path"].to_list()
 
-        if max_last_modified is not None:
-            if isinstance(max_last_modified, str):
-                max_last_modified = dt.datetime.fromisoformat(max_last_modified)
-            file_details = file_details.filter(
-                pl.col("last_modified") <= max_last_modified
-            )
-
-        if min_count_rows is not None:
-            file_details = file_details.filter(pl.col("conunt_rows") >= min_count_rows)
-
-        if max_count_rows is not None:
-            file_details = file_details.filter(pl.col("count_rows") <= max_count_rows)
-
-        self.selected_file_details = file_details
-
-    def load_pa_dataset(
+    def _load_arrow_dataset(
         self,
         start_time: dt.datetime | str | None = None,
         end_time: dt.datetime | str | None = None,
@@ -398,8 +427,8 @@ class Dataset(BaseDataset):
         max_file_size: int | str | None = None,
         min_last_modified: dt.datetime | str | None = None,
         max_last_modified: dt.datetime | str | None = None,
-        min_count_rows: int | None = None,
-        max_count_rows: int | None = None,
+        min_row_counts: int | None = None,
+        max_row_counts: int | None = None,
         **kwargs,
     ):
         self._check_path_exists()
@@ -411,161 +440,232 @@ class Dataset(BaseDataset):
             self._set_basedataset()
             self._set_file_details()
 
-        self.filter_file_details(
+        self.select_batches(
             start_time=start_time,
             end_time=end_time,
             min_file_size=min_file_size,
             max_file_size=max_file_size,
             min_last_modified=min_last_modified,
             max_last_modified=max_last_modified,
-            min_count_rows=min_count_rows,
-            max_count_rows=max_count_rows,
+            min_row_counts=min_row_counts,
+            max_row_counts=max_row_counts,
         )
 
-        self._pa_dataset = pds.dataset(
-            self.selected_file_details["path"].to_list(),
+        self._arrow_dataset = pds.dataset(
+            self.selected_batches,
             format=self._format,
             filesystem=self._dir_filesystem,
             partitioning=self._partitioning,
-            schema=self._pa_schema if hasattr(self, "_pa_schema") else self._schema,
+            schema=self._arrow_schema
+            if hasattr(self, "_arrow_schema")
+            else self._schema,
             **kwargs,
         )
 
-        self.register(
-            f"{self.name}.pa_dataset", self._pa_dataset
-        ) if self.name else self.register(f"pa_dataset", self._pa_dataset)
+        self.register("arrow_dataset", self._arrow_dataset)
 
-    def load_pa_table(
-        self,
-        start_time: dt.datetime | str | None = None,
-        end_time: dt.datetime | str | None = None,
-        min_file_size: int | str | None = None,
-        max_file_size: int | str | None = None,
-        min_last_modified: dt.datetime | str | None = None,
-        max_last_modified: dt.datetime | str | None = None,
-        min_count_rows: int | None = None,
-        max_count_rows: int | None = None,
-        **kwargs,
-    ):
-        self._check_path_exists()
+    # def _load_arrow_table(
+    #     self,
+    #     start_time: dt.datetime | str | None = None,
+    #     end_time: dt.datetime | str | None = None,
+    #     min_file_size: int | str | None = None,
+    #     max_file_size: int | str | None = None,
+    #     min_last_modified: dt.datetime | str | None = None,
+    #     max_last_modified: dt.datetime | str | None = None,
+    #     min_row_counts: int | None = None,
+    #     max_row_counts: int | None = None,
+    #     **kwargs,
+    # ):
+    #     self._check_path_exists()
 
-        if self._path_empty:
-            return None
+    #     if self._path_empty:
+    #         return None
 
-        if self.file_details is None:
-            self._set_basedataset()
-            self._set_file_details()
+    #     if self.file_details is None:
+    #         self._set_basedataset()
+    #         self._set_file_details()
 
-        self.filter_file_details(
-            start_time=start_time,
-            end_time=end_time,
-            min_file_size=min_file_size,
-            max_file_size=max_file_size,
-            min_last_modified=min_last_modified,
-            max_last_modified=max_last_modified,
-            min_count_rows=min_count_rows,
-            max_count_rows=max_count_rows,
-        )
+    #     self.select_batches(
+    #         start_time=start_time,
+    #         end_time=end_time,
+    #         min_file_size=min_file_size,
+    #         max_file_size=max_file_size,
+    #         min_last_modified=min_last_modified,
+    #         max_last_modified=max_last_modified,
+    #         min_row_counts=min_row_counts,
+    #         max_row_counts=max_row_counts,
+    #     )
 
-        if self._format == "parquet":
-            table = pq.read_table(
-                self.selected_file_details["path"].to_list(),
-                filesystem=self._dir_filesystem,
-                schema=self._schema or self.schema,
-                **kwargs,
-            )
+    #     if self._format == "parquet":
+    #         table = pq.read_table(
+    #             self.selected_file_details["path"].to_list(),
+    #             filesystem=self._dir_filesystem,
+    #             schema=self._schema or self.schema,
+    #             **kwargs,
+    #         )
 
-        else:
-            table = pa.concat_tables(
-                run_parallel(
-                    self._read_file,
-                    self.selected_file_details["path"].to_list,
-                    schema=self._schema or self.schema,
-                    format=self._format,
-                    filesystem=self._pa_filesystem,
-                    backend="threading",
-                    **kwargs,
-                )
-            )
+    #     else:
+    #         table = pa.concat_tables(
+    #             run_parallel(
+    #                 self._read_file,
+    #                 self.selected_file_details["path"].to_list,
+    #                 schema=self._schema or self.schema,
+    #                 format=self._format,
+    #                 filesystem=self._arrow_filesystem,
+    #                 backend="threading",
+    #                 **kwargs,
+    #             )
+    #         )
 
-        self._pa_table = table.combine_chunks()
-        # self._ddb_rel = self.ddb.from_arrow(self._pa_table)
+    #     self._arrow_table = table
+    #     # self._ddb_rel = self.ddb.from_arrow(self._arrow_table)
 
-        self.register(
-            f"{self.name}.pa_table", self._pa_table
-        ) if self.name else self.register(f"pa_table", self._pa_table)
+    #     self.register("arrow_table", self._arrow_table.combine_chunks())
 
-    def sql(self, sql: str):
+    def materialize(self, *args, **kwargs):
+        if not hasattr(self, "_arrow_dataset") or len(args) > 0 or len(kwargs) > 0:
+            self._load_arrow_dataset(*args, **kwargs)
+        self._arrow_table = self._arrow_dataset.to_table(fragment_readahead=1e4)
+        self.register("arrow_table", self._arrow_table)
+
+    def reload(self, *args, **kwargs):
+        self._set_file_details()
+        self._load_arrow_dataset(*args, **kwargs)
+        if self.is_materialized:
+            self.materialize(*args, **kwargs)
+
+    def sql(self, sql: str, materialize: bool = True):
+        if materialize:
+            self.materialize()
         return self.ddb.sql(sql)
 
-    def register(self, name: str, py_obj: object):
-        self.ddb.register(name, py_obj)
+    def register(self, view_name: str, py_obj: object):
+        if self.name:
+            self.ddb.sql(f"CREATE OR REPLACE schema {self.name}")
+            self.ddb.register(f"{self.name}.{view_name}", py_obj)
+        else:
+            self.ddb.register(view_name, py_obj)
+
+    def unregister(self, view_name: str):
+        self.ddb.unregister(
+            f"{self.name}.{view_name}"
+        ) if self.name else self.ddb.unregister(view_name)
+
+    def _del(
+        self,
+        pl: bool = False,
+        df: bool = False,
+        ddb_rel: bool = False,
+        arrow_table: bool = False,
+        arrow_dataset: bool = False,
+        ddb_table: bool = False,
+    ):
+        if hasattr(self, "_pl") and pl:
+            del self._pl
+
+        if hasattr(self, "_df") and df:
+            del self._df
+
+        if hasattr(self, "_ddb_rel") and ddb_rel:
+            del self._ddb_rel
+
+        if hasattr(self, "_arrow_table") and arrow_table:
+            del self._arrow_table
+            self.unregister("arrow_table")
+
+        if hasattr(self, "_arrow_dataset") and arrow_dataset:
+            del self._arrow_dataset
+            self.unregister("arrow_dataset")
+
+        if ddb_table:
+            tables = self.sql("SHOW TABLES").pl()["name"].to_list()
+            for table in tables:
+                self.sql(f"DROP TABLE {table}")
+
+    def sort(self, by: str | List[str], ascending: bool | List[bool] = True):
+        if not hasattr(self, "_arrow_table"):
+            self._ddb_rel = sort_table(self.ddb_rel, sort_by=by, ascending=ascending)
+        else:
+            self._arrow_table = sort_table(
+                self._arrow_table, sort_by=by, ascending=ascending
+            )
+            self._del(ddb_rel=True)
+
+        self._del(pl=True, df=True)
+
+    def distinct(self, subset: str | List[str] | None = None, keep: str = "first"):
+        if not hasattr(self, "_arrow_table"):
+            self._ddb_rel = distinct_table(self.ddb_rel, subset=subset, keep=keep)
+        else:
+            self._arrow_table = distinct_table(
+                self._arrow_table, subset=subset, keep=keep
+            )
+            self._del(ddb_rel=True)
+
+        self._del(pl=True, df=True)
 
     @property
-    def pa_dataset(self):
-        if not hasattr(self, "_pa_dataset"):
-            self.load_pa_dataset()
-        return self._pa_dataset
+    def arrow_dataset(self):
+        if not hasattr(self, "_arrow_dataset"):
+            self._load_arrow_dataset()
+        return self._arrow_dataset
 
     @property
-    def pa_table(self):
-        if not hasattr(self, "_pa_table"):
-            if hasattr(self, "_pa_dataset"):
-                if not isinstance(self._pa_dataset, pa._dataset.FileSystemDataset):
-                    self._pa_table = self._pa_dataset.to_table()
+    def arrow_table(self):
+        if not hasattr(self, "_arrow_table"):
+            if hasattr(self, "_arrow_dataset"):
+                if not isinstance(self._arrow_dataset, pa._dataset.FileSystemDataset):
+                    self._arrow_table = self._arrow_dataset.to_table()
                 else:
-                    self.load_pa_table()
+                    self._load_arrow_table()
             else:
-                self.load_pa_table()
-        return self._pa_table
+                self._load_arrow_table()
+        return self._arrow_table
 
     @property
     def ddb_rel(self):
         # if not hasattr(self, "_ddb_rel"):
-        if hasattr(self, "_pa_table"):
-            self._ddb_rel = self.ddb.from_arrow(self._pa_table)
-        elif hasattr(self, "_pa_dataset"):
-            self._ddb_rel = self.ddb.from_arrow(self._pa_dataset)
+        if hasattr(self, "_arrow_table"):
+            self._ddb_rel = self.ddb.from_arrow(self._arrow_table)
         else:
-            self._ddb_rel = self.ddb.from_arrow(self.pa_dataset)
+            self._ddb_rel = self.ddb.from_arrow(self.arrow_dataset)
 
         return self._ddb_rel
 
     @property
     def pl(self):
         if not hasattr(self, "_pl"):
-            if hasattr(self, "_pa_table"):
-                self._pl = pl.from_arrow(self._pa_table)
-            else:
-                self._pl = self.ddb_rel.pl()
+            self._pl = self.ddb_rel.pl()
         return self._pl
 
     @property
     def pl_scan(self):
         if not hasattr(self, "_pl_scan"):
-            self._pl_scan = pl.scan_pyarrow_dataset(self.pa_dataset)
+            self._pl_scan = pl.scan_pyarrow_dataset(self.arrow_dataset)
         return self._pl_scan
 
     @property
     def df(self):
         if not hasattr(self, "_df"):
-            if hasattr(self, "_pa_table"):
-                self._df = self._pa_table.to_pandas()
-            else:
-                self._df = self.ddb_rel.df()
+            self._df = self.ddb_rel.df()
+
         return self._df
 
-    def create_ddb_table(self, temp: bool = False):
+    @property
+    def is_materialized(self):
+        return hasattr(self, "_arrow_table")
+
+    def create_ddb_table(self):
         temp = "temp" if temp else ""
-        if hasattr(self, "_pa_table"):
+        if hasattr(self, "_arrow_table"):
             self.sql(
-                f"CREATE OR REPLACE {temp} table {self.name}.table_ FROM pa_table"
-            ) if self.name else self.sql("CREATE OR REPLACE table_ FROM pa_table")
+                f"CREATE OR REPLACE {temp} table {self.name}.table_ FROM arrow_table"
+            ) if self.name else self.sql("CREATE OR REPLACE table_ FROM arrow_table")
         else:
-            _ = self.pa_dataset
+            _ = self.arrow_dataset
             self.sql(
-                f"CREATE OR REPLACE {temp} table {self.name}.table_ FROM pa_dataset"
-            ) if self.name else self.sql("CREATE OR REPLACE table_ FROM pa_dataset")
+                f"CREATE OR REPLACE {temp} table {self.name}.table_ FROM arrow_dataset"
+            ) if self.name else self.sql("CREATE OR REPLACE table_ FROM arrow_dataset")
 
     def _estimate_batch_size(self, file_size: str = "10MB"):
         unit = re.findall(["[k,m,g,t,p]{0,1}b"], file_size.lower())
@@ -574,7 +674,7 @@ class Dataset(BaseDataset):
             val
             / (
                 humanize_size(self.file_details["size"].sum(), unit=unit)
-                / self.file_details["count_rows"].sum()
+                / self.file_details["row_counts"].sum()
             )
         )
 
@@ -588,7 +688,7 @@ class Dataset(BaseDataset):
         drop: bool = False,
         sort_by: str | List[str] | None = None,
         ascending: bool | List[bool] = True,
-        distinct: bool = True,
+        distinct: bool = False,
         subset: str | List[str] | None = None,
         keep: str = "first",
         presort: bool = False,
@@ -597,7 +697,7 @@ class Dataset(BaseDataset):
         if as_ == "polars":
             table_ = self.pl
         elif as_ == "arrow":
-            table_ = self.pa_table
+            table_ = self.arrow_table
         elif as_ == "pandas":
             table_ = self.df
         else:
@@ -629,7 +729,7 @@ class Dataset(BaseDataset):
         partition_by_timedelta: str | List[str] | None = None,
         sort_by: str | List[str] | None = None,
         ascending: bool | List[bool] = True,
-        distinct: bool = True,
+        distinct: bool = False,
         subset: str | List[str] | None = None,
         keep: str = "first",
         presort: bool = False,
@@ -653,33 +753,125 @@ class Dataset(BaseDataset):
             as_=as_,
         )
 
-    def add(self, table):
-        if isinstance(table, list | tuple):
-            table = pa.concat_tables(
-                [to_arrow(table_) for table_ in table], promote=True
+    def to_batches(
+        self,
+        batch_size: int | None = 1_000_000,
+        file_size: str | None = None,
+        partition_by_strftime: str | List[str] | None = None,
+        partition_by_timedelta: str | List[str] | None = None,
+        sort_by: str | List[str] | None = None,
+        ascending: bool | List[bool] = True,
+        distinct: bool = False,
+        subset: str | List[str] | None = None,
+        keep: str = "first",
+        presort: bool = False,
+        as_: str | None = None,
+    ):
+        return list(
+            self.iter_batches(
+                batch_size=batch_size,
+                file_size=file_size,
+                partition_by_strftime=partition_by_strftime,
+                partition_by_timedelta=partition_by_timedelta,
+                sort_by=sort_by,
+                ascending=ascending,
+                distinct=distinct,
+                subset=subset,
+                keep=keep,
+                presort=presort,
+                as_=as_,
             )
-        else:
-            table = to_arrow(table)
+        )
 
-        if not hasattr(self, "_pa_dataset"):
-            self._pa_dataset = pds.dataset(table)
+    # def from_batches(
+    #     self,
+    #     batches: List[pa.Table]
+    #     | List[pl.DataFrame]
+    #     | List[pd.DataFrame]
+    #     | List[duckdb.DuckDBPyRelation],
+    # ):
+    #     batches = [to_arrow(batch) for batch in batches]
+    #     self.append()
+
+    def append(
+        self,
+        table: List[pa.Table]
+        # | List[pl.DataFrame]
+        | List[pd.DataFrame] | List[duckdb.DuckDBPyRelation] | List[pds.Dataset],
+        mode: str = "delta",
+        subset: str | List[str] | None = None,
+    ):
+        if isinstance(table, list | tuple):
+            if isinstance(table[0], pds.Dataset):
+                table = pds.Dataset(table)
+
+            elif isinstance(table[0], duckdb.DuckDBPyRelation):
+                table0 = table[0]
+                for table_ in table[1:]:
+                    table0 = table0.union(table_)
+
+                table = table0
+
+            else:
+                table = pa.concat_tables(
+                    [to_arrow(table_) for table_ in table], promote=True
+                )
+
+        if mode == "delta":
+            table = get_table_delta(table1=table, table2=self.ddb_rel, subset=subset)
+            if isinstance(table, pds.Dataset):
+                if not hasattr(self, "_arrow_dataset"):
+                    self._arrow_dataset = table
+                else:
+                    self._arrow_dataset = pds.dataset([self._arrow_dataset, table])
+
+                self._del(
+                    pl=True, df=True, ddb_rel=True, arrow_table=True, ddb_table=True
+                )
+
+            elif isinstance(table, duckdb.DuckDBPyRelation):
+                if hasattr(self, "_ddb_rel"):
+                    self._ddb_rel = self._ddb_rel.union(table)
+
+        if mode == "overwrite":
+            self._del(
+                pl=True,
+                df=True,
+                ddb_rel=True,
+                arrow_table=True,
+                arrow_dataset=True,
+                ddb_table=True,
+            )
+
+        table = to_arrow(table)
+
+        if not hasattr(self, "_arrow_dataset"):
+            self._arrow_dataset = pds.dataset(table)
         else:
-            self._pa_dataset = pds.dataset([self._pa_dataset, pds.dataset(table)])
+            self._arrow_dataset = pds.dataset([self._arrow_dataset, pds.dataset(table)])
 
         self.register(
-            f"{self.name}.pa_dataset", self._pa_dataset
-        ) if self.name else self.register("pa_dataset", self._pa_dataset)
+            f"{self.name}.arrow_dataset", self._arrow_dataset
+        ) if self.name else self.register("arrow_dataset", self._arrow_dataset)
 
-        if hasattr(self, "_pa_table"):
-            self._pa_table = pa.concat_tables([self._pa_table, table], promote=True)
+        if hasattr(self, "_arrow_table"):
+            self._arrow_table = pa.concat_tables(
+                [self._arrow_table, table], promote=True
+            )
             self.register(
-                f"{self.name}.pa_table", self._pa_table
-            ) if self.name else self.register("pa_table", self._pa_table)
+                f"{self.name}.arrow_table", self._arrow_table
+            ) if self.name else self.register("arrow_table", self._arrow_table)
 
         if hasattr(self, "_pl"):
-            self._pl = pl.from_arrow(self._pa_table)
+            del self._pl
+
         if hasattr(self, "_df"):
-            self._df = self._pa_table.to_pandas()
+            del self._df
+
+        if hasattr(self, "_ddb_rel"):
+            del self._ddb_rel
+
+    # def write()
 
     # def write(
     #     table: Union[pa.Table, pd.DataFrame, pl.DataFrame, duckdb.DuckDBPyRelation]
@@ -724,7 +916,7 @@ class Dataset(BaseDataset):
 #             val
 #             / (
 #                 humanize_size(self.file_details["size"].sum(), unit=unit)
-#                 / self.file_details["count_rows"].sum()
+#                 / self.file_details["row_counts"].sum()
 #             )
 #         )
 

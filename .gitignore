@@ -60,3 +60,4 @@ examples/*
 .venv*/
 .conda*/
 poetry.lock
+.tmp/

@@ -244,7 +244,7 @@ def sort_table(
         return table.order(sort_by_sql)
 
 
-def get_tables_diff(
+def get_table_delta(
     table1: pa.Table
     | pd.DataFrame
     | pl.DataFrame
@@ -330,7 +330,7 @@ def distinct_table(
 ) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
     if isinstance(table, (pa.Table, pd.DataFrame, pl.DataFrame, pa._dataset.Dataset)):
         table_ = to_polars(table=table)
-        if presort:
+        if presort and sort_by:
             table_ = sort_table(
                 table=table_, sort_by=sort_by, ascending=ascending
             )  # , ddb=ddb)
@@ -354,7 +354,7 @@ def distinct_table(
 
     else:
         table_ = table
-        if presort:
+        if presort and sort_by:
             table_ = table_.order(sort_as_sql(sort_by=sort_by, ascending=ascending))
         if not subset:
             table_ = table.distinct()
@@ -647,7 +647,17 @@ def partition_by(
         if n_rows:
             table_ = table_.project(f"* exclude(row_nr), row_nr/{n_rows} as row_nr")
 
-        partitions = table_.project(", ".join(columns)).distinct().fetchall()
+        partitions = list(
+            map(
+                tuple(
+                    table_.project(", ".join(columns))
+                    .pl()
+                    .unique(maintain_order=True)
+                    .to_numpy()
+                    .tolist()
+                )
+            )
+        )
 
         yield from {
             partition[0]
