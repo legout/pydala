@@ -123,7 +123,7 @@ class BaseDataset:
                 if hasattr(self, "_arrow_schema")
                 else self._schema,
             )
-            self.selected_batches = self._basedataset.files
+            self.selected_files = self._basedataset.files
         else:
             self._basedataset = None
 
@@ -301,18 +301,7 @@ class BaseDataset:
             return
         else:
             run_parallel(_repair_schema, self.schemas, backend="threading")
-        # for path in self.schemas:
-        #     schema = self.schemas[path]
-        #     if schema != self.schema:
-        #         table = self._read_file(
-        #             path=path, schema=self.schema, filesystem=self._arrow_filesystem
-        #         )
-        #         self._write_file(
-        #             table=table,
-        #             path=path,
-        #             # schema=self.schema,
-        #             filesystem=self._arrow_filesystem,
-        #         )
+        
 
 
 class Dataset(BaseDataset):
@@ -342,7 +331,7 @@ class Dataset(BaseDataset):
             **storage_options,
         )
 
-    def select_batches(
+    def select_files(
         self,
         start_time: dt.datetime | str | None = None,
         end_time: dt.datetime | str | None = None,
@@ -350,8 +339,8 @@ class Dataset(BaseDataset):
         max_file_size: int | str | None = None,
         min_last_modified: dt.datetime | str | None = None,
         max_last_modified: dt.datetime | str | None = None,
-        min_row_counts: int | None = None,
-        max_row_counts: int | None = None,
+        min_row_count: int | None = None,
+        max_row_count: int | None = None,
     ):
         self._check_path_exists()
 
@@ -364,60 +353,40 @@ class Dataset(BaseDataset):
 
         file_details = self.file_details
         filter_ = []
-        # if start_time is not None:
-        #     if isinstance(start_time, str):
-        #         start_time = dt.datetime.fromisoformat(start_time)
-        #     file_details = file_details.filter(pl.col("timestamp_max") >= start_time)
+        
         if start_time:
             filter_.append(f"timestamp_max>='{start_time}'")
-        # if end_time is not None:
-        #     if isinstance(end_time, str):
-        #         end_time = dt.datetime.fromisoformat(end_time)
-        #     file_details = file_details.filter(pl.col("timestamp_min") <= end_time)
+        
         if end_time:
             filter_.append(f"timestamp_min<='{end_time}'")
-        # if min_file_size is not None:
-        #     file_details = file_details.filter(pl.col("size") >= min_file_size)
+        
         if min_file_size:
             filter_.append(f"size>={min_file_size}")
-        # if max_file_size is not None:
-        #     file_details = file_details.filter(pl.col("size") <= max_file_size)
+        
         if max_file_size:
             filter_.append(f"size<={max_file_size}")
-        # if min_last_modified is not None:
-        #     if isinstance(min_last_modified, str):
-        #         min_last_modified = dt.datetime.fromisoformat(min_last_modified)
-        #     file_details = file_details.filter(
-        #         pl.col("last_modified") >= min_last_modified
-        #     )
+        
         if min_last_modified:
             filter_.append(f"last_modified>='{min_last_modified}'")
 
-        # if max_last_modified is not None:
-        #     if isinstance(max_last_modified, str):
-        #         max_last_modified = dt.datetime.fromisoformat(max_last_modified)
-        #     file_details = file_details.filter(
-        #         pl.col("last_modified") <= max_last_modified
-        #     )
+        
         if max_last_modified:
             filter_.append(f"last_modified<='{max_last_modified}'")
 
-        # if min_row_counts is not None:
-        #     file_details = file_details.filter(pl.col("conunt_rows") >= min_row_counts)
-        if min_row_counts:
-            filter_.append(f"row_counts>={min_row_counts}")
-        # if max_row_counts is not None:
-        #     file_details = file_details.filter(pl.col("row_counts") <= max_row_counts)
-        if max_row_counts:
-            filter_.append(f"row_counts<={max_row_counts}")
+        
+        if min_row_count:
+            filter_.append(f"row_count>={min_row_count}")
+        
+        if max_row_count:
+            filter_.append(f"row_count<={max_row_count}")
 
-        if len(filter_) > 0:
+        if filter_:
             self.selected_file_details = (
                 self.ddb.sql("FROM file_details").filter(" AND ".join(filter_)).pl()
             )
         else:
             self.selected_file_details = file_details
-        self.selected_batches = self.selected_file_details["path"].to_list()
+        self.selected_files = self.selected_file_details["path"].to_list()
 
     def _load_arrow_dataset(
         self,
@@ -427,8 +396,8 @@ class Dataset(BaseDataset):
         max_file_size: int | str | None = None,
         min_last_modified: dt.datetime | str | None = None,
         max_last_modified: dt.datetime | str | None = None,
-        min_row_counts: int | None = None,
-        max_row_counts: int | None = None,
+        min_row_count: int | None = None,
+        max_row_count: int | None = None,
         **kwargs,
     ):
         self._check_path_exists()
@@ -440,22 +409,23 @@ class Dataset(BaseDataset):
             self._set_basedataset()
             self._set_file_details()
 
-        self.select_batches(
+        self.select_files(
             start_time=start_time,
             end_time=end_time,
             min_file_size=min_file_size,
             max_file_size=max_file_size,
             min_last_modified=min_last_modified,
             max_last_modified=max_last_modified,
-            min_row_counts=min_row_counts,
-            max_row_counts=max_row_counts,
+            min_row_count=min_row_count,
+            max_row_count=max_row_count,
         )
 
         self._arrow_dataset = pds.dataset(
-            self.selected_batches,
+            self.selected_files,
             format=self._format,
             filesystem=self._dir_filesystem,
             partitioning=self._partitioning,
+            partition_base_dir=self._path,
             schema=self._arrow_schema
             if hasattr(self, "_arrow_schema")
             else self._schema,
@@ -472,8 +442,8 @@ class Dataset(BaseDataset):
     #     max_file_size: int | str | None = None,
     #     min_last_modified: dt.datetime | str | None = None,
     #     max_last_modified: dt.datetime | str | None = None,
-    #     min_row_counts: int | None = None,
-    #     max_row_counts: int | None = None,
+    #     min_row_count: int | None = None,
+    #     max_row_count: int | None = None,
     #     **kwargs,
     # ):
     #     self._check_path_exists()
@@ -485,15 +455,15 @@ class Dataset(BaseDataset):
     #         self._set_basedataset()
     #         self._set_file_details()
 
-    #     self.select_batches(
+    #     self.select_files(
     #         start_time=start_time,
     #         end_time=end_time,
     #         min_file_size=min_file_size,
     #         max_file_size=max_file_size,
     #         min_last_modified=min_last_modified,
     #         max_last_modified=max_last_modified,
-    #         min_row_counts=min_row_counts,
-    #         max_row_counts=max_row_counts,
+    #         min_row_count=min_row_count,
+    #         max_row_count=max_row_count,
     #     )
 
     #     if self._format == "parquet":
@@ -523,7 +493,7 @@ class Dataset(BaseDataset):
     #     self.register("arrow_table", self._arrow_table.combine_chunks())
 
     def materialize(self, *args, **kwargs):
-        if not hasattr(self, "_arrow_dataset") or len(args) > 0 or len(kwargs) > 0:
+        if not hasattr(self, "_arrow_dataset") or args or kwargs:
             self._load_arrow_dataset(*args, **kwargs)
         self._arrow_table = self._arrow_dataset.to_table(fragment_readahead=1e4)
         self.register("arrow_table", self._arrow_table)
@@ -694,16 +664,16 @@ class Dataset(BaseDataset):
         presort: bool = False,
         as_: str | None = None,  # options are "polars", "arrow", "duckdb", "pandas"
     ):
-        if as_ == "polars":
-            table_ = self.pl
-        elif as_ == "arrow":
+        if as_ == "arrow":
             table_ = self.arrow_table
         elif as_ == "pandas":
             table_ = self.df
+        elif as_ == "polars":
+            table_ = self.pl
         else:
             table_ = self.ddb_rel
 
-        res = partition_by(
+        return partition_by(
             table_,
             self._timestamp_column,
             columns=columns,
@@ -719,7 +689,6 @@ class Dataset(BaseDataset):
             keep=keep,
             presort=presort,
         )
-        return res  # dict(res) if as_dict else list(res)
 
     def iter_batches(
         self,
