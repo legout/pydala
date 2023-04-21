@@ -46,7 +46,7 @@ class BaseDataset:
         so = infer_storage_options(path)
         self._protocol = storage_options.pop("protocol", None) or so["protocol"]
         self._path = so["path"].replace(bucket, "")
-        self._bucket = bucket
+        self._bucket = bucket or ""
         self._full_path = os.path.join(self._bucket, self._path)
         self._uri = (
             os.path.join(f"{self._protocol}://", self._full_path)
@@ -301,7 +301,6 @@ class BaseDataset:
             return
         else:
             run_parallel(_repair_schema, self.schemas, backend="threading")
-        
 
 
 class Dataset(BaseDataset):
@@ -353,30 +352,28 @@ class Dataset(BaseDataset):
 
         file_details = self.file_details
         filter_ = []
-        
+
         if start_time:
             filter_.append(f"timestamp_max>='{start_time}'")
-        
+
         if end_time:
             filter_.append(f"timestamp_min<='{end_time}'")
-        
+
         if min_file_size:
             filter_.append(f"size>={min_file_size}")
-        
+
         if max_file_size:
             filter_.append(f"size<={max_file_size}")
-        
+
         if min_last_modified:
             filter_.append(f"last_modified>='{min_last_modified}'")
 
-        
         if max_last_modified:
             filter_.append(f"last_modified<='{max_last_modified}'")
 
-        
         if min_row_count:
             filter_.append(f"row_count>={min_row_count}")
-        
+
         if max_row_count:
             filter_.append(f"row_count<={max_row_count}")
 
@@ -434,79 +431,37 @@ class Dataset(BaseDataset):
 
         self.register("arrow_dataset", self._arrow_dataset)
 
-    # def _load_arrow_table(
-    #     self,
-    #     start_time: dt.datetime | str | None = None,
-    #     end_time: dt.datetime | str | None = None,
-    #     min_file_size: int | str | None = None,
-    #     max_file_size: int | str | None = None,
-    #     min_last_modified: dt.datetime | str | None = None,
-    #     max_last_modified: dt.datetime | str | None = None,
-    #     min_row_count: int | None = None,
-    #     max_row_count: int | None = None,
-    #     **kwargs,
-    # ):
-    #     self._check_path_exists()
-
-    #     if self._path_empty:
-    #         return None
-
-    #     if self.file_details is None:
-    #         self._set_basedataset()
-    #         self._set_file_details()
-
-    #     self.select_files(
-    #         start_time=start_time,
-    #         end_time=end_time,
-    #         min_file_size=min_file_size,
-    #         max_file_size=max_file_size,
-    #         min_last_modified=min_last_modified,
-    #         max_last_modified=max_last_modified,
-    #         min_row_count=min_row_count,
-    #         max_row_count=max_row_count,
-    #     )
-
-    #     if self._format == "parquet":
-    #         table = pq.read_table(
-    #             self.selected_file_details["path"].to_list(),
-    #             filesystem=self._dir_filesystem,
-    #             schema=self._schema or self.schema,
-    #             **kwargs,
-    #         )
-
-    #     else:
-    #         table = pa.concat_tables(
-    #             run_parallel(
-    #                 self._read_file,
-    #                 self.selected_file_details["path"].to_list,
-    #                 schema=self._schema or self.schema,
-    #                 format=self._format,
-    #                 filesystem=self._arrow_filesystem,
-    #                 backend="threading",
-    #                 **kwargs,
-    #             )
-    #         )
-
-    #     self._arrow_table = table
-    #     # self._ddb_rel = self.ddb.from_arrow(self._arrow_table)
-
-    #     self.register("arrow_table", self._arrow_table.combine_chunks())
-
     def materialize(self, *args, **kwargs):
-        if not hasattr(self, "_arrow_dataset") or args or kwargs:
+        if (
+            not hasattr(self, "_arrow_dataset")
+            or args
+            or kwargs
+            or self.file_details.shape != self.selected_file_details.shape
+        ):
             self._load_arrow_dataset(*args, **kwargs)
         self._arrow_table = self._arrow_dataset.to_table(fragment_readahead=1e4)
         self.register("arrow_table", self._arrow_table)
 
     def reload(self, *args, **kwargs):
+        was_materialized = self.is_materialized
+
+        self._del(
+            pl=True,
+            df=True,
+            ddb_rel=True,
+            arrow_table=True,
+            arrow_dataset=True,
+            ddb_table=True,
+        )
+
         self._set_file_details()
         self._load_arrow_dataset(*args, **kwargs)
-        if self.is_materialized:
+        if was_materialized:
             self.materialize(*args, **kwargs)
 
-    def sql(self, sql: str, materialize: bool = True):
+    def sql(self, sql: str, materialize: bool = True, *args, **kwargs):
         if materialize:
-            self.materialize()
+            self.materialize(*args, **kwargs)
         return self.ddb.sql(sql)
 
     def register(self, view_name: str, py_obj: object):
@@ -553,7 +508,7 @@ class Dataset(BaseDataset):
                 self.sql(f"DROP TABLE {table}")
 
     def sort(self, by: str | List[str], ascending: bool | List[bool] = True):
-        if not hasattr(self, "_arrow_table"):
+        if not self.is_materialized:
             self._ddb_rel = sort_table(self.ddb_rel, sort_by=by, ascending=ascending)
         else:
             self._arrow_table = sort_table(
@@ -561,7 +516,7 @@ class Dataset(BaseDataset):
             )
             self._del(ddb_rel=True)
 
-        self._del(pl=True, df=True)
+        self._del(pl=True, df=True, ddb_table=True)
 
     def distinct(self, subset: str | List[str] | None = None, keep: str = "first"):
         if not hasattr(self, "_arrow_table"):

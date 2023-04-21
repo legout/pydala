@@ -494,7 +494,7 @@ def with_row_count(
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
     | pa._dataset.Dataset,
-    over: str | List[str] | None,
+    over: str | List[str] | None = None,
 ):
     if over:
         if len(over) == 0:
@@ -645,17 +645,16 @@ def partition_by(
 
     else:
         if n_rows:
-            table_ = table_.project(f"* exclude(row_nr), row_nr/{n_rows} as row_nr")
+            table_ = table_.project(f"* exclude(row_nr), row_nr // {n_rows} as row_nr")
 
         partitions = list(
             map(
-                tuple(
-                    table_.project(", ".join(columns))
-                    .pl()
-                    .unique(maintain_order=True)
-                    .to_numpy()
-                    .tolist()
-                )
+                tuple,
+                table_.project(", ".join(columns))
+                .pl()
+                .unique(maintain_order=True)
+                .to_numpy()
+                .tolist(),
             )
         )
 
