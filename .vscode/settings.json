@@ -1,8 +1,0 @@
-{
-    "python.formatting.provider": "none",
-    "editor.tabCompletion": "on",
-    "diffEditor.codeLens": true,
-    "[python]": {
-        "editor.defaultFormatter": "ms-python.python"
-    }
-}
