@@ -16,17 +16,18 @@ from fsspec import filesystem as fsspec_filesystem
 from fsspec.implementations import dirfs
 from fsspec.spec import AbstractFileSystem
 from fsspec.utils import infer_storage_options
+from zmq import has
 
-from ..utils.base import humanize_size, run_parallel, random_id
+from ..utils.base import humanize_size, random_id, run_parallel
+from ..utils.dataset import get_arrow_schema, get_file_details, get_unified_schema
 from ..utils.schema import convert_schema, sort_schema, unify_schema
 from ..utils.table import (
-    to_arrow,
-    sort_table,
     distinct_table,
-    partition_by,
     get_table_delta,
+    partition_by,
+    sort_table,
+    to_arrow,
 )
-from ..utils.dataset import get_arrow_schema, get_unified_schema, get_file_details
 
 
 class BaseDataset:
@@ -71,10 +72,15 @@ class BaseDataset:
             self._schema = None
 
         self._set_filesystem(filesystem=filesystem, **storage_options)
+
+        self._check_path_exists()
+        if not self._path_exists:
+            self._dir_filesystem.mkdirs(self._path, exist_ok=True)
+
         self._set_basedataset()
 
         self._timestamp_column = timestamp_column
-        if self._timestamp_column is None:
+        if not self._path_empty and self._timestamp_column is None:
             timestamp_columns = [
                 col.name
                 for col in self._basedataset.schema
@@ -431,50 +437,30 @@ class Dataset(BaseDataset):
 
         self.register("arrow_dataset", self._arrow_dataset)
 
-    def materialize(self, *args, **kwargs):
-        if (
-            not hasattr(self, "_arrow_dataset")
-            or args
-            or kwargs
-            or self.file_details.shape != self.selected_file_details.shape
-        ):
-            self._load_arrow_dataset(*args, **kwargs)
-        self._arrow_table = self._arrow_dataset.to_table(fragment_readahead=1e4)
-        self.register("arrow_table", self._arrow_table)
+    @property
+    def is_materialized(self):
+        return hasattr(self, "_arrow_table")
 
-    def reload(self, *args, **kwargs):
-        was_materialized = self.is_materialized
+    def materialize(self, *args, combine_chunks: bool = True, **kwargs):
+        if args or kwargs or not hasattr(self, "_arrow_table"):
+            if args or kwargs:
+                self.select_files(*args, **kwargs)
 
-        self._del(
-            pl=True,
-            df=True,
-            ddb_rel=True,
-            arrow_table=True,
-            arrow_dataset=True,
-            ddb_table=True,
-        )
+            if self._format == "parquet":
+                self._arrow_table = pq.read_table(
+                    self.select_files,
+                    filesystem=self._dir_filesystem,
+                    partitioning=self._partitioning,
+                )
 
-        self._set_file_details()
-        self._load_arrow_dataset(*args, **kwargs)
-        if was_materialized:
-            self.materialize(*args, **kwargs)
+            else:
+                self._load_arrow_dataset()
+                self._arrow_table = self._arrow_dataset.to_table(fragment_readahead=1e4)
 
-    def sql(self, sql: str, materialize: bool = True, *args, **kwargs):
-        if materialize:
-            self.materialize(*args, **kwargs)
-        return self.ddb.sql(sql)
+            if combine_chunks:
+                self._arrow_table = self._arrow_table.combine_chunks()
 
-    def register(self, view_name: str, py_obj: object):
-        if self.name:
-            self.ddb.sql(f"CREATE OR REPLACE schema {self.name}")
-            self.ddb.register(f"{self.name}.{view_name}", py_obj)
-        else:
-            self.ddb.register(view_name, py_obj)
-
-    def unregister(self, view_name: str):
-        self.ddb.unregister(
-            f"{self.name}.{view_name}"
-        ) if self.name else self.ddb.unregister(view_name)
+            self.register("arrow_table", self._arrow_table)
 
     def _del(
         self,
@@ -503,9 +489,45 @@ class Dataset(BaseDataset):
             self.unregister("arrow_dataset")
 
         if ddb_table:
-            tables = self.sql("SHOW TABLES").pl()["name"].to_list()
-            for table in tables:
-                self.sql(f"DROP TABLE {table}")
+            tables = self.sql("SHOW TABLES")
+            if tables is not None:
+                tables = tables.pl()["name"].to_list()
+                for table in tables:
+                    self.sql(f"DROP TABLE {table}")
+
+    def reload(self, *args, **kwargs):
+        was_materialized = self.is_materialized
+
+        self._del(
+            pl=True,
+            df=True,
+            ddb_rel=True,
+            arrow_table=True,
+            arrow_dataset=True,
+            ddb_table=True,
+        )
+        self._set_basedataset()
+        self._set_file_details()
+        self._load_arrow_dataset(*args, **kwargs)
+        if was_materialized:
+            self.materialize(*args, **kwargs)
+
+    def sql(self, sql: str, materialize: bool = False, *args, **kwargs):
+        if materialize:
+            self.materialize(*args, **kwargs)
+        return self.ddb.sql(sql)
+
+    def register(self, view_name: str, py_obj: object):
+        if self.name:
+            self.ddb.sql(f"CREATE OR REPLACE schema {self.name}")
+            self.ddb.register(f"{self.name}.{view_name}", py_obj)
+        else:
+            self.ddb.register(view_name, py_obj)
+
+    def unregister(self, view_name: str):
+        self.ddb.unregister(
+            f"{self.name}.{view_name}"
+        ) if self.name else self.ddb.unregister(view_name)
 
     def sort(self, by: str | List[str], ascending: bool | List[bool] = True):
         if not self.is_materialized:
@@ -516,7 +538,10 @@ class Dataset(BaseDataset):
             )
             self._del(ddb_rel=True)
 
-        self._del(pl=True, df=True, ddb_table=True)
+        if self.has_ddb_table:
+            self.ddb.sql()
+
+        self._del(pl=True, df=True)
 
     def distinct(self, subset: str | List[str] | None = None, keep: str = "first"):
         if not hasattr(self, "_arrow_table"):
@@ -527,7 +552,7 @@ class Dataset(BaseDataset):
             )
             self._del(ddb_rel=True)
 
-        self._del(pl=True, df=True)
+        self._del(pl=True, df=True, ddb_table=True)
 
     @property
     def arrow_dataset(self):
@@ -537,14 +562,15 @@ class Dataset(BaseDataset):
 
     @property
     def arrow_table(self):
-        if not hasattr(self, "_arrow_table"):
-            if hasattr(self, "_arrow_dataset"):
-                if not isinstance(self._arrow_dataset, pa._dataset.FileSystemDataset):
-                    self._arrow_table = self._arrow_dataset.to_table()
-                else:
-                    self._load_arrow_table()
-            else:
-                self._load_arrow_table()
+        if not self.is_materialized:
+            self.materialize()
+            # if hasattr(self, "_arrow_dataset"):
+            #     if not isinstance(self._arrow_dataset, pa._dataset.FileSystemDataset):
+            #         self._arrow_table = self._arrow_dataset.to_table()
+            #     else:
+            #         self._load_arrow_table()
+            # else:
+            #     self._load_arrow_table()
         return self._arrow_table
 
     @property
@@ -577,20 +603,62 @@ class Dataset(BaseDataset):
         return self._df
 
     @property
-    def is_materialized(self):
-        return hasattr(self, "_arrow_table")
+    def ddb_tables(self):
+        if not hasattr(self, "_tables"):
+            if self.ddb.sql("SHOW TABLES"):
+                self._tables = [
+                    table_[0] for table_ in self.ddb.sql("SHOW TABLES").fetchall()
+                ]
+            else:
+                self._tables = []
+        return self._tables
 
-    def create_ddb_table(self):
+    @property
+    def has_ddb_table(self):
+        if not self.ddb_tables:
+            return False
+        if self.name:
+            return (
+                f"{self.name}.table_temp" in self.ddb_tables
+                or f"{self.name}.table_" in self.ddb_tables
+            )
+        else:
+            return "table_temp" in self.ddb_tables or "table_" in self.ddb_tables
+
+    def _create_ddb_table(self, temp: bool = False):
         temp = "temp" if temp else ""
         if hasattr(self, "_arrow_table"):
             self.sql(
-                f"CREATE OR REPLACE {temp} table {self.name}.table_ FROM arrow_table"
-            ) if self.name else self.sql("CREATE OR REPLACE table_ FROM arrow_table")
+                f"CREATE OR REPLACE {temp} table {self.name}.table_{temp} AS FROM arrow_table"
+            ) if self.name else self.sql(
+                f"CREATE OR REPLACE {temp} table table_{temp} AS FROM arrow_table"
+            )
         else:
             _ = self.arrow_dataset
             self.sql(
-                f"CREATE OR REPLACE {temp} table {self.name}.table_ FROM arrow_dataset"
-            ) if self.name else self.sql("CREATE OR REPLACE table_ FROM arrow_dataset")
+                f"CREATE OR REPLACE {temp} table {self.name}.table_{temp} As FROM arrow_dataset"
+            ) if self.name else self.sql(
+                f"CREATE OR REPLACE {temp} table table_{temp} As FROM arrow_dataset"
+            )
+
+    def _update_ddb_table(self, temp: bool = False):
+        temp = "temp" if temp else ""
+        # existing_tables = [table_[0] for table_ in self.ddb.sql("SHOW TABLES").fetchall()]
+        if hasattr(self, "_arrow_table"):
+            self.sql(
+                f"INSERT INTO {temp} table {self.name}.table_{temp} FROM arrow_table"
+            ) if self.name else self.sql(f"INSERT INTO table_{temp} FROM arrow_table")
+        else:
+            _ = self.arrow_dataset
+            self.sql(
+                f"INSERT INTO {temp} table {self.name}.table_{temp} FROM arrow_dataset"
+            ) if self.name else self.sql(f"INSERT INTO table_{temp} FROM arrow_dataset")
+
+    def to_ddb_table(self, temp: bool = False):
+        temp = "temp" if temp else ""
+        self._update_ddb_table(
+            temp=temp
+        ) if self.has_ddb_table else self._create_ddb_table(temp=temp)
 
     def _estimate_batch_size(self, file_size: str = "10MB"):
         unit = re.findall(["[k,m,g,t,p]{0,1}b"], file_size.lower())
@@ -658,6 +726,7 @@ class Dataset(BaseDataset):
         keep: str = "first",
         presort: bool = False,
         as_: str | None = None,
+        return_as_dict: bool = False,
     ):
         if file_size:
             batch_size = self._estimate_batch_size(file_size=file_size)
@@ -666,7 +735,7 @@ class Dataset(BaseDataset):
             strftime=partition_by_strftime,
             timedelta=partition_by_timedelta,
             n_rows=batch_size,
-            as_dict=False,
+            as_dict=return_as_dict,
             drop=True,
             sort_by=sort_by,
             ascending=ascending,
@@ -690,6 +759,7 @@ class Dataset(BaseDataset):
         keep: str = "first",
         presort: bool = False,
         as_: str | None = None,
+        return_as_dict: bool = False,
     ):
         return list(
             self.iter_batches(
@@ -704,18 +774,9 @@ class Dataset(BaseDataset):
                 keep=keep,
                 presort=presort,
                 as_=as_,
+                return_as_dict=return_as_dict,
             )
         )
-
-    # def from_batches(
-    #     self,
-    #     batches: List[pa.Table]
-    #     | List[pl.DataFrame]
-    #     | List[pd.DataFrame]
-    #     | List[duckdb.DuckDBPyRelation],
-    # ):
-    #     batches = [to_arrow(batch) for batch in batches]
-    #     self.append()
 
     def append(
         self,
@@ -921,37 +982,69 @@ class Dataset(BaseDataset):
 #         )
 
 
-def sync_datasets(dataset1: Dataset, dataset2: Dataset, delete: bool = True):
+def sync_datasets(
+    dataset1: Dataset,
+    dataset2: Dataset,
+    delete: bool = True,
+    multipart_threshold: int = 10,
+):
     fs1 = dataset1._dir_filesystem
     fs2 = dataset2._dir_filesystem
 
-    def transfer_file(f):
-        with fs2.open(f, "wb") as ff:
-            ff.write(fs1.read_bytes(f))
+    def transfer_file(f, multipart_threshold=10):
+        fs2.makedirs(os.path.dirname(f), exist_ok=True)
+        n_parts = fs1.size(f) // (1024**2 * multipart_threshold) + 1
+        with fs2.open(f, "ab") as ff:
+            for part in range(n_parts):
+                ff.write(
+                    fs1.read_block(
+                        f,
+                        offset=part * 1024**2 * multipart_threshold,
+                        length=1024**2 * multipart_threshold,
+                    )
+                )
 
     def delete_file(f):
         fs2.rm(f)
 
-    new_files = (
-        duckdb.from_arrow(dataset1.files.select(["path", "name", "size"]).to_arrow())
-        .except_(
+    if dataset2.selected_file_details is None:
+        new_files = dataset1.selected_file_details["path"].to_list()
+    else:
+        new_files = (
             duckdb.from_arrow(
-                dataset2.files.select(["path", "name", "size"]).to_arrow()
+                dataset1.selected_file_details.select(
+                    ["path", "name", "size"]
+                ).to_arrow()
             )
+            .except_(
+                duckdb.from_arrow(
+                    dataset2.selected_file_details.select(
+                        ["path", "name", "size"]
+                    ).to_arrow()
+                )
+            )
+            .pl()["path"]
+            .to_list()
         )
-        .pl()["path"]
-        .to_list()
-    )
 
-    _ = run_parallel(transfer_file, new_files)
+    if len(new_files):
+        _ = run_parallel(
+            transfer_file,
+            new_files,
+            multipart_threshold=multipart_threshold,
+            backend="loky",
+        )
 
-    if delete:
+    if delete and dataset2.selected_file_details is not None:
         rm_files = duckdb.from_arrow(
-            dataset2.files.select(["path", "name", "size"]).to_arrow()
+            dataset2.selected_file_details.select(["path", "name", "size"]).to_arrow()
         ).except_(
             duckdb.from_arrow(
-                dataset1.files.select(["path", "name", "size"]).to_arrow()
+                dataset1.selected_file_details.select(
+                    ["path", "name", "size"]
+                ).to_arrow()
             )
         )
 
-        _ = run_parallel(delete_file, rm_files)
+        if len(rm_files):
+            _ = run_parallel(delete_file, rm_files, backend="loky")
