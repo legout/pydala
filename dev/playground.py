@@ -63,3 +63,9 @@ aa=[rel1.order("time,exchange,symbol").filter(f"strftime(time, '%Y')='{part}'").
 %memit aa=pl.from_arrow(table1).with_columns([pl.col("time").dt.strftime("%Y").alias("_part_")]).partition_by("_part_")
 
 # %%
+
+fs = filesystem("s3")
+
+con = duckdb.connect()
+ds = pds.dataset("dswb-nes-data/EWN/MMS/stage1/AP", filesystem=fs,)
+# %%
