@@ -722,7 +722,7 @@ def read_table(
     format: str | None = None,
     filesystem: AbstractFileSystem | None = None,
     partitioning: str | List[str] | None = None,
-) -> pa.Table:
+) -> pa.Table:  # sourcery skip: avoid-builtin-shadow
     if filesystem is None:
         filesystem = fsspec_filesystem("file")
 
@@ -745,7 +745,7 @@ def read_table(
         partitions = get_partitions(path, partitioning=partitioning)
 
         for key, values in partitions:
-            table = table.append_colum(key, [values] * len(table))
+            table = table.append_column(field_=key, column=pa.array([values] * len(table)))
 
     return table
 
