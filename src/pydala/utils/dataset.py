@@ -102,3 +102,4 @@ def get_file_details(
     details.index.names = ["path"]
     details = pl.from_pandas(details.reset_index())
     return details
+

@@ -77,13 +77,13 @@ class BaseDataset:
         if not self._path_exists:
             self._dir_filesystem.mkdirs(self._path, exist_ok=True)
 
-        self._set_basedataset()
+        self._set_base_dataset()
 
         self._timestamp_column = timestamp_column
         if not self._path_empty and self._timestamp_column is None:
             timestamp_columns = [
                 col.name
-                for col in self._basedataset.schema
+                for col in self._base_dataset.schema
                 if isinstance(col.type, pa.TimestampType)
             ]
             self._timestamp_column = timestamp_columns[0]
@@ -117,10 +117,10 @@ class BaseDataset:
             pafs.FSSpecHandler(self._dir_filesystem)
         )
 
-    def _set_basedataset(self):
+    def _set_base_dataset(self):
         self._check_path_exists()
         if not self._path_empty:
-            self._basedataset = pds.dataset(
+            self._base_dataset = pds.dataset(
                 self._path,
                 format=self._format,
                 filesystem=self._dir_filesystem,
@@ -129,15 +129,15 @@ class BaseDataset:
                 if hasattr(self, "_arrow_schema")
                 else self._schema,
             )
-            self.selected_files = self._basedataset.files
+            self.selected_files = self._base_dataset.files
         else:
-            self._basedataset = None
+            self._base_dataset = None
 
     def _set_file_details(self):
         self._check_path_exists()
         if not self._path_empty:
             self.file_details = get_file_details(
-                self._basedataset,
+                self._base_dataset,
                 timestamp_column=self._timestamp_column,
                 filesystem=self._dir_filesystem,
             )
@@ -203,20 +203,20 @@ class BaseDataset:
 
     @property
     def arrow_schemas(self):
-        if self._basedataset is None:
-            self._set_basedataset()
-            if self._basedataset:
+        if self._base_dataset is None:
+            self._set_base_dataset()
+            if self._base_dataset:
                 return None
         if not hasattr(self, "_arrow_schemas"):
-            self._arrow_schemas = get_arrow_schema(self._basedataset)
+            self._arrow_schemas = get_arrow_schema(self._base_dataset)
 
         return self._arrow_schemas
 
     @property
     def pl_schemas(self):
-        if self._basedataset is None:
-            self._set_basedataset()
-            if self._basedataset:
+        if self._base_dataset is None:
+            self._set_base_dataset()
+            if self._base_dataset:
                 return None
         if not hasattr(self, "_pl_schemas"):
             self._pl_schemas = {
@@ -230,9 +230,9 @@ class BaseDataset:
 
     @property
     def arrow_schema(self):
-        if self._basedataset is None:
-            self._set_basedataset()
-            if self._basedataset:
+        if self._base_dataset is None:
+            self._set_base_dataset()
+            if self._base_dataset:
                 return None
         if not hasattr(self, "_arrow_schema"):
             self._arrow_schema, self._schemas_equal = get_unified_schema(
@@ -243,9 +243,9 @@ class BaseDataset:
 
     @property
     def pl_schema(self):
-        if self._basedataset is None:
-            self._set_basedataset()
-            if self._basedataset:
+        if self._base_dataset is None:
+            self._set_base_dataset()
+            if self._base_dataset:
                 return None
         if not hasattr(self, "_pl_schema"):
             self._pl_schema = convert_schema(self.arrow_schema)
@@ -257,7 +257,7 @@ class BaseDataset:
 
     @property
     def schemas_equal(self):
-        if self._basedataset is None:
+        if self._base_dataset is None:
             return None
         if not hasattr(self, "_schemas_equal"):
             self._arrow_schema, self._schemas_equal = get_unified_schema(
@@ -267,9 +267,9 @@ class BaseDataset:
 
     @property
     def arrow_schema_sorted(self):
-        if self._basedataset is None:
-            self._set_basedataset()
-            if self._basedataset:
+        if self._base_dataset is None:
+            self._set_base_dataset()
+            if self._base_dataset:
                 return None
         if not hasattr(self, "_arrow_schema_sorted"):
             self._arrow_schema_sorted = sort_schema(self.arrow_schema)
@@ -277,9 +277,9 @@ class BaseDataset:
 
     @property
     def pl_schema_sorted(self):
-        if self._basedataset is None:
-            self._set_basedataset()
-            if self._basedataset:
+        if self._base_dataset is None:
+            self._set_base_dataset()
+            if self._base_dataset:
                 return None
         if not hasattr(self, "_pl_schema_sorted"):
             self._pl_schema_sorted = sort_schema(self.pl_schema)
@@ -353,7 +353,7 @@ class Dataset(BaseDataset):
             return None
 
         if self.file_details is None:
-            self._set_basedataset()
+            self._set_base_dataset()
             self._set_file_details()
 
         file_details = self.file_details
@@ -409,7 +409,7 @@ class Dataset(BaseDataset):
             return None
 
         if self.file_details is None:
-            self._set_basedataset()
+            self._set_base_dataset()
             self._set_file_details()
 
         self.select_files(
@@ -506,7 +506,7 @@ class Dataset(BaseDataset):
             arrow_dataset=True,
             ddb_table=True,
         )
-        self._set_basedataset()
+        self._set_base_dataset()
         self._set_file_details()
         self._load_arrow_dataset(*args, **kwargs)
         if was_materialized:
@@ -856,15 +856,26 @@ class Dataset(BaseDataset):
         if hasattr(self, "_ddb_rel"):
             del self._ddb_rel
 
-    # def write()
 
-    # def write(
-    #     table: Union[pa.Table, pd.DataFrame, pl.DataFrame, duckdb.DuckDBPyRelation]
-    #     | List[Union[pa.Table, pd.DataFrame, pl.DataFrame, duckdb.DuckDBPyRelation]]
-    # ):
-    #     pass
+def cache_dataset(
+    dataset: Dataset,
+    cache_base_dir: str = "/tmp/pydala",
+    ddb: duckdb.DuckDBPyConnection | None = None,
+):
+    cache_dataset_ = Dataset(
+        path=dataset._path,
+        bucket=cache_base_dir,
+        format=dataset._format,
+        partitioning=dataset._partitioning,
+        filesystem=fsspec_filesystem(protocol="file"),
+        timestamp_column=dataset._timestamp_column,
+        name=dataset.name,
+        ddb=ddb,
+    )
+    sync_datasets(dataset1=dataset, dataset2=cache_dataset_, delete=True)
 
-    # def append(self, table:, )
+    cache_dataset_.reload()
+    return cache_dataset_
 
 
 # class Writer(Dataset):
@@ -982,82 +993,82 @@ class Dataset(BaseDataset):
 #         )
 
 
-def sync_datasets(
-    dataset1: Dataset,
-    dataset2: Dataset,
-    delete: bool = True,
-    multipart_threshold: int = 10,
-):
-    fs1 = dataset1._dir_filesystem
-    fs2 = dataset2._dir_filesystem
+# def sync_datasets(
+#     dataset1: Dataset,
+#     dataset2: Dataset,
+#     delete: bool = True,
+#     multipart_threshold: int = 10,
+# ):
+#     fs1 = dataset1._dir_filesystem
+#     fs2 = dataset2._dir_filesystem
 
-    def transfer_file(f, multipart_threshold=10):
-        fs2.makedirs(os.path.dirname(f), exist_ok=True)
-        n_parts = fs1.size(f) // (1024**2 * multipart_threshold) + 1
-        with fs2.open(f, "ab") as ff:
-            for part in range(n_parts):
-                ff.write(
-                    fs1.read_block(
-                        f,
-                        offset=part * 1024**2 * multipart_threshold,
-                        length=1024**2 * multipart_threshold,
-                    )
-                )
+#     def transfer_file(f, multipart_threshold=10):
+#         fs2.makedirs(os.path.dirname(f), exist_ok=True)
+#         n_parts = fs1.size(f) // (1024**2 * multipart_threshold) + 1
+#         with fs2.open(f, "ab") as ff:
+#             for part in range(n_parts):
+#                 ff.write(
+#                     fs1.read_block(
+#                         f,
+#                         offset=part * 1024**2 * multipart_threshold,
+#                         length=1024**2 * multipart_threshold,
+#                     )
+#                 )
 
-    def delete_file(f):
-        fs2.rm(f)
+#     def delete_file(f):
+#         fs2.rm(f)
 
-    if dataset2.selected_file_details is None:
-        new_files = dataset1.selected_file_details["path"].to_list()
-    else:
-        new_files = (
-            duckdb.from_arrow(
-                dataset1.selected_file_details.select(
-                    ["path", "name", "size"]
-                ).to_arrow()
-            )
-            .except_(
-                duckdb.from_arrow(
-                    dataset2.selected_file_details.select(
-                        ["path", "name", "size"]
-                    ).to_arrow()
-                )
-            )
-            .pl()["path"]
-            .to_list()
-        )
+#     if dataset2.selected_file_details is None:
+#         new_files = dataset1.selected_file_details["path"].to_list()
+#     else:
+#         new_files = (
+#             duckdb.from_arrow(
+#                 dataset1.selected_file_details.select(
+#                     ["path", "name", "size"]
+#                 ).to_arrow()
+#             )
+#             .except_(
+#                 duckdb.from_arrow(
+#                     dataset2.selected_file_details.select(
+#                         ["path", "name", "size"]
+#                     ).to_arrow()
+#                 )
+#             )
+#             .pl()["path"]
+#             .to_list()
+#         )
 
-    if len(new_files):
-        _ = run_parallel(
-            transfer_file,
-            new_files,
-            multipart_threshold=multipart_threshold,
-            backend="loky",
-        )
+#     if len(new_files):
+#         _ = run_parallel(
+#             transfer_file,
+#             new_files,
+#             multipart_threshold=multipart_threshold,
+#             backend="loky",
+#         )
 
-    if delete and dataset2.selected_file_details is not None:
-        rm_files = (
-            duckdb.from_arrow(
-                dataset2.selected_file_details.select(
-                    ["path", "name", "size"]
-                ).to_arrow()
-            )
-            .except_(
-                duckdb.from_arrow(
-                    dataset1.selected_file_details.select(
-                        ["path", "name", "size"]
-                    ).to_arrow()
-                )
-            )
-            .pl()["path"]
-            .to_list()
-        )
+#     if delete and dataset2.selected_file_details is not None:
+#         rm_files = (
+#             duckdb.from_arrow(
+#                 dataset2.selected_file_details.select(
+#                     ["path", "name", "size"]
+#                 ).to_arrow()
+#             )
+#             .except_(
+#                 duckdb.from_arrow(
+#                     dataset1.selected_file_details.select(
+#                         ["path", "name", "size"]
+#                     ).to_arrow()
+#                 )
+#             )
+#             .pl()["path"]
+#             .to_list()
+#         )
 
-        if len(rm_files):
-            _ = run_parallel(delete_file, rm_files, backend="loky")
+#         if len(rm_files):
+#             _ = run_parallel(delete_file, rm_files, backend="loky")
 
 
-def sync_datasets2(dataset1: Dataset, dataset2: Dataset, delete: bool = True):
+def sync_datasets(dataset1: Dataset, dataset2: Dataset, delete: bool = True):
     def sync(key: str):
         m2[key] = m1[key]
 
