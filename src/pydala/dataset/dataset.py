@@ -5,11 +5,9 @@ from typing import Dict, List, Tuple, Union
 
 import duckdb
 import pandas as pd
-import polars as pl
+import polars as pl_
 import pyarrow as pa
-import pyarrow.csv as pc
 import pyarrow.dataset as pds
-import pyarrow.feather as pf
 import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 from fsspec import filesystem as fsspec_filesystem
@@ -19,7 +17,12 @@ from fsspec.utils import infer_storage_options
 from zmq import has
 
 from ..utils.base import humanize_size, random_id, run_parallel
-from ..utils.dataset import get_arrow_schema, get_file_details, get_unified_schema
+from ..utils.dataset import (
+    get_arrow_schema,
+    get_file_details,
+    get_unified_schema,
+    sync_datasets as sync_datasets_,
+)
 from ..utils.schema import convert_schema, sort_schema, unify_schema
 from ..utils.table import (
     distinct_table,
@@ -27,6 +30,8 @@ from ..utils.table import (
     partition_by,
     sort_table,
     to_arrow,
+    read_table,
+    write_table,
 )
 
 
@@ -152,55 +157,6 @@ class BaseDataset:
             self.size = 0
             self.size_h = 0
 
-    @staticmethod
-    def _read_file(
-        path: str,
-        schema: pa.Schema | None = None,
-        format: str | None = None,
-        filesystem: pafs.FileSystem | None = None,
-    ) -> pa.Table:  # sourcery skip: avoid-builtin-shadow
-        format = format or os.path.splitext(path)[-1]
-
-        if re.sub("\.", "", format) == "parquet":
-            table = pq.read_table(path, filesystem=filesystem, schema=schema)
-
-        elif re.sub("\.", "", format) == "csv":
-            with filesystem.open_input_file(path) as f:
-                table = pc.read_csv(f, schema=schema)
-
-        elif re.sub("\.", "", format) in ["arrow", "ipc", "feather"]:
-            with filesystem.open_input_file(path) as f:
-                table = pf.read_table(f)
-
-        return table
-
-    @staticmethod
-    def _write_file(
-        table: pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation,
-        path: str,
-        schema: pa.Schema | None = None,
-        format: str | None = None,
-        filesystem: pafs.FileSystem | None = None,
-        **kwargs,
-    ):  # sourcery skip: avoid-builtin-shadow
-        table = to_arrow(table)
-        format = format or os.path.splitext(path)[-1]
-        schema = kwargs.pop(schema, None) or schema or table.schema
-
-        if re.sub("\.", "", format) == "parquet":
-            pq.write_table(table, path, filesystem=filesystem, **kwargs)
-
-        elif re.sub("\.", "", format) == "csv":
-            with filesystem.open_output_stream(path) as f:
-                table = pa.table.from_batches(table.to_batches(), schema=schema)
-                pc.write_csv(table, f, **kwargs)
-
-        elif re.sub("\.", "", format) in ["arrow", "ipc", "feather"]:
-            compression = kwargs.pop("compression", None) or "uncompressed"
-            with filesystem.open_output_scream(path) as f:
-                table = pa.table.from_batches(table.to_batches(), schema=schema)
-                pf.write_feather(f, compression=compression, **kwargs)
-
     @property
     def arrow_schemas(self):
         if self._base_dataset is None:
@@ -293,14 +249,14 @@ class BaseDataset:
         def _repair_schema(path):
             schema = self.schemas[path]
             if schema != self.schema:
-                table = self._read_file(
-                    path=path, schema=self.schema, filesystem=self._arrow_filesystem
+                table = read_table(
+                    path=path, schema=self.schema, filesystem=self._dir_filesystem
                 )
-                self._write_file(
+                write_table(
                     table=table,
                     path=path,
                     # schema=self.schema,
-                    filesystem=self._arrow_filesystem,
+                    filesystem=self._dir_filesystem,
                 )
 
         if self.schemas_equal:
@@ -446,21 +402,20 @@ class Dataset(BaseDataset):
             if args or kwargs:
                 self.select_files(*args, **kwargs)
 
-            if self._format == "parquet":
-                self._arrow_table = pq.read_table(
-                    self.select_files,
+            self._arrow_table = pa.concat_tables(
+                run_parallel(
+                    read_table,
+                    self.selected_files,
+                    schema=self.schema,
+                    format=self._format,
                     filesystem=self._dir_filesystem,
                     partitioning=self._partitioning,
+                    backend="threading",
                 )
-
-            else:
-                self._load_arrow_dataset()
-                self._arrow_table = self._arrow_dataset.to_table(fragment_readahead=1e4)
-
-            if combine_chunks:
-                self._arrow_table = self._arrow_table.combine_chunks()
+            )
 
             self.register("arrow_table", self._arrow_table)
+            self._del(pl=True, df=True, ddb_rel=True)
 
     def _del(
         self,
@@ -555,8 +510,12 @@ class Dataset(BaseDataset):
         self._del(pl=True, df=True, ddb_table=True)
 
     @property
+    def _has_arrow_dataset(self):
+        return hasattr(self, "_arrow_dataset")
+
+    @property
     def arrow_dataset(self):
-        if not hasattr(self, "_arrow_dataset"):
+        if not self._has_arrow_dataset:
             self._load_arrow_dataset()
         return self._arrow_dataset
 
@@ -564,40 +523,50 @@ class Dataset(BaseDataset):
     def arrow_table(self):
         if not self.is_materialized:
             self.materialize()
-            # if hasattr(self, "_arrow_dataset"):
-            #     if not isinstance(self._arrow_dataset, pa._dataset.FileSystemDataset):
-            #         self._arrow_table = self._arrow_dataset.to_table()
-            #     else:
-            #         self._load_arrow_table()
-            # else:
-            #     self._load_arrow_table()
+
         return self._arrow_table
 
     @property
+    def _has_ddb_rel(self):
+        return hasattr(self, "_ddb_rel")
+
+    @property
     def ddb_rel(self):
-        # if not hasattr(self, "_ddb_rel"):
-        if hasattr(self, "_arrow_table"):
-            self._ddb_rel = self.ddb.from_arrow(self._arrow_table)
-        else:
-            self._ddb_rel = self.ddb.from_arrow(self.arrow_dataset)
+        if not self._has_ddb_rel:
+            if self.is_materialized:
+                self._ddb_rel = self.ddb.from_arrow(self._arrow_table)
+            else:
+                self._ddb_rel = self.ddb.from_arrow(self.arrow_dataset)
 
         return self._ddb_rel
 
     @property
+    def _has_pl(self):
+        return hasattr(self, "_pl")
+
+    @property
     def pl(self):
-        if not hasattr(self, "_pl"):
+        if not self._has_pl:
             self._pl = self.ddb_rel.pl()
         return self._pl
 
     @property
+    def _has_pl_scan(self):
+        return hasattr(self, "_pl_scan")
+
+    @property
     def pl_scan(self):
-        if not hasattr(self, "_pl_scan"):
-            self._pl_scan = pl.scan_pyarrow_dataset(self.arrow_dataset)
+        if not self._has_pl_scan:
+            self._pl_scan = pl_.scan_pyarrow_dataset(self.arrow_dataset)
         return self._pl_scan
 
     @property
+    def _has_df(self):
+        return hasattr(self, "_df")
+
+    @property
     def df(self):
-        if not hasattr(self, "_df"):
+        if not self._has_df:
             self._df = self.ddb_rel.df()
 
         return self._df
@@ -719,6 +688,7 @@ class Dataset(BaseDataset):
         file_size: str | None = None,
         partition_by_strftime: str | List[str] | None = None,
         partition_by_timedelta: str | List[str] | None = None,
+        drop: bool = False,
         sort_by: str | List[str] | None = None,
         ascending: bool | List[bool] = True,
         distinct: bool = False,
@@ -726,7 +696,7 @@ class Dataset(BaseDataset):
         keep: str = "first",
         presort: bool = False,
         as_: str | None = None,
-        return_as_dict: bool = False,
+        as_dict: bool = False,
     ):
         if file_size:
             batch_size = self._estimate_batch_size(file_size=file_size)
@@ -735,8 +705,8 @@ class Dataset(BaseDataset):
             strftime=partition_by_strftime,
             timedelta=partition_by_timedelta,
             n_rows=batch_size,
-            as_dict=return_as_dict,
-            drop=True,
+            as_dict=as_dict,
+            drop=drop,
             sort_by=sort_by,
             ascending=ascending,
             distinct=distinct,
@@ -752,6 +722,7 @@ class Dataset(BaseDataset):
         file_size: str | None = None,
         partition_by_strftime: str | List[str] | None = None,
         partition_by_timedelta: str | List[str] | None = None,
+        drop: bool = False,
         sort_by: str | List[str] | None = None,
         ascending: bool | List[bool] = True,
         distinct: bool = False,
@@ -759,30 +730,37 @@ class Dataset(BaseDataset):
         keep: str = "first",
         presort: bool = False,
         as_: str | None = None,
-        return_as_dict: bool = False,
+        as_dict: bool = False,
     ):
-        return list(
-            self.iter_batches(
-                batch_size=batch_size,
-                file_size=file_size,
-                partition_by_strftime=partition_by_strftime,
-                partition_by_timedelta=partition_by_timedelta,
-                sort_by=sort_by,
-                ascending=ascending,
-                distinct=distinct,
-                subset=subset,
-                keep=keep,
-                presort=presort,
-                as_=as_,
-                return_as_dict=return_as_dict,
-            )
+        batches = self.iter_batches(
+            batch_size=batch_size,
+            file_size=file_size,
+            partition_by_strftime=partition_by_strftime,
+            partition_by_timedelta=partition_by_timedelta,
+            sort_by=sort_by,
+            ascending=ascending,
+            distinct=distinct,
+            subset=subset,
+            keep=keep,
+            presort=presort,
+            as_=as_,
+            as_dict=as_dict,
+            drop=drop,
         )
+        return dict(batches) if as_dict else list(batches)
 
     def append(
         self,
-        table: List[pa.Table]
-        # | List[pl.DataFrame]
-        | List[pd.DataFrame] | List[duckdb.DuckDBPyRelation] | List[pds.Dataset],
+        table: pa.Table
+        | pd.DataFrame
+        | pl_.DataFrame
+        | pa.dataset.Dataset
+        | duckdb.DuckDBPyRelation
+        | List[pa.Table]
+        | List[pl_.DataFrame]
+        | List[pd.DataFrame]
+        | List[pa.dataset.Dataset]
+        | List[duckdb.DuckDBPyRelation],
         mode: str = "delta",
         subset: str | List[str] | None = None,
     ):
@@ -801,60 +779,62 @@ class Dataset(BaseDataset):
                 table = pa.concat_tables(
                     [to_arrow(table_) for table_ in table], promote=True
                 )
+        else:
+            # if isinstance(table, pl_.DataFrame | pd.DataFrame):
+            table = to_arrow(table)
 
-        if mode == "delta":
-            table = get_table_delta(table1=table, table2=self.ddb_rel, subset=subset)
-            if isinstance(table, pds.Dataset):
-                if not hasattr(self, "_arrow_dataset"):
-                    self._arrow_dataset = table
+        if mode == "delta" and self._has_arrow_dataset:
+            if self._timestamp_column:
+                if not isinstance(table, duckdb.DuckDBPyRelation):
+                    min_timestamp, max_timestamp = (
+                        self.ddb.from_arrow(table)
+                        .aggregate(
+                            f"min({self._timestamp_column}), max({self._timestamp_column})"
+                        )
+                        .fetchone()
+                    )
                 else:
-                    self._arrow_dataset = pds.dataset([self._arrow_dataset, table])
+                    min_timestamp, max_timestamp = table.aggregate(
+                        f"min({self._timestamp_column}), max({self._timestamp_column})"
+                    ).fetchone()
 
-                self._del(
-                    pl=True, df=True, ddb_rel=True, arrow_table=True, ddb_table=True
+            table = (
+                get_table_delta(
+                    table1=self.ddb.from_arrow(table),
+                    table2=self.ddb_rel.filter(
+                        f"{self._timestamp_column}>='{min_timestamp}' AND {self._timestamp_column}<='{max_timestamp}'"
+                    ),
+                    subset=subset,
                 )
-
-            elif isinstance(table, duckdb.DuckDBPyRelation):
-                if hasattr(self, "_ddb_rel"):
-                    self._ddb_rel = self._ddb_rel.union(table)
-
-        if mode == "overwrite":
-            self._del(
-                pl=True,
-                df=True,
-                ddb_rel=True,
-                arrow_table=True,
-                arrow_dataset=True,
-                ddb_table=True,
+                if self._timestamp_column
+                else get_table_delta(
+                    table1=self.ddb.from_arrow(table),
+                    table2=self.ddb_rel,
+                    subset=subset,
+                )
             )
 
         table = to_arrow(table)
 
-        if not hasattr(self, "_arrow_dataset"):
-            self._arrow_dataset = pds.dataset(table)
-        else:
-            self._arrow_dataset = pds.dataset([self._arrow_dataset, pds.dataset(table)])
-
-        self.register(
-            f"{self.name}.arrow_dataset", self._arrow_dataset
-        ) if self.name else self.register("arrow_dataset", self._arrow_dataset)
-
-        if hasattr(self, "_arrow_table"):
-            self._arrow_table = pa.concat_tables(
-                [self._arrow_table, table], promote=True
-            )
+        if len(table):
+            if not self._has_arrow_dataset:
+                self._arrow_dataset = pds.dataset(table)
+            else:
+                self._arrow_dataset = pds.dataset(
+                    [self._arrow_dataset, pds.dataset(table)]
+                )
             self.register(
-                f"{self.name}.arrow_table", self._arrow_table
-            ) if self.name else self.register("arrow_table", self._arrow_table)
+                f"{self.name}.arrow_dataset", self._arrow_dataset
+            ) if self.name else self.register("arrow_dataset", self._arrow_dataset)
 
-        if hasattr(self, "_pl"):
-            del self._pl
+            if self.is_materialized:
+                self._arrow_table = pa.concat_tables(self._arrow_table, table)
 
-        if hasattr(self, "_df"):
-            del self._df
+                self.register(
+                    f"{self.name}.arrow_table", self._arrow_table
+                ) if self.name else self.register("arrow_table", self._arrow_table)
 
-        if hasattr(self, "_ddb_rel"):
-            del self._ddb_rel
+            self._del(pl=True, df=True, ddb_rel=True, ddb_table=True)
 
 
 def cache_dataset(
@@ -876,6 +856,88 @@ def cache_dataset(
 
     cache_dataset_.reload()
     return cache_dataset_
+
+
+def write_dataset(
+    tables: pa.Table
+    | pl_.DataFrame
+    | pd.DataFrame
+    | pa.dataset.Dataset
+    | duckdb.DuckDBPyRelation
+    | List[pa.Table]
+    | List[pl_.DataFrame]
+    | List[pd.DataFrame]
+    | List[pa.dataset.Dataset]
+    | List[duckdb.DuckDBPyRelation],
+    path: str,
+    batch,
+):
+    pass
+
+
+def sync_datasets(dataset1: Dataset, dataset2: Dataset, delete: bool = True):
+    def sync(key: str):
+        m2[key] = m1[key]
+
+    def del_(keys: List[str]):
+        m2.delitems(keys)
+
+    m1 = dataset1._filesystem.get_mapper(dataset1._full_path)
+    m2 = dataset2._filesystem.get_mapper(dataset2._full_path)
+
+    if dataset2.selected_file_details is None:
+        new_files = dataset1.selected_file_details["path"].to_list()
+    else:
+        new_files = (
+            duckdb.from_arrow(
+                dataset1.selected_file_details.select(
+                    ["path", "name", "size"]
+                ).to_arrow()
+            )
+            .except_(
+                duckdb.from_arrow(
+                    dataset2.selected_file_details.select(
+                        ["path", "name", "size"]
+                    ).to_arrow()
+                )
+            )
+            .pl()["path"]
+            .to_list()
+        )
+
+    new_files = [f.split(dataset1._path)[1] for f in new_files]
+    new_files = [f[1:] if f[0] == "/" else f for f in new_files]
+
+    if len(new_files):
+        _ = run_parallel(
+            sync,
+            new_files,
+            backend="loky",
+        )
+
+    if delete and dataset2.selected_file_details is not None:
+        rm_files = (
+            duckdb.from_arrow(
+                dataset2.selected_file_details.select(
+                    ["path", "name", "size"]
+                ).to_arrow()
+            )
+            .except_(
+                duckdb.from_arrow(
+                    dataset1.selected_file_details.select(
+                        ["path", "name", "size"]
+                    ).to_arrow()
+                )
+            )
+            .pl()["path"]
+            .to_list()
+        )
+
+        rm_files = [f.split(dataset2._path)[1] for f in rm_files]
+        rm_files = [f[1:] if f[0] == "/" else f for f in rm_files]
+
+        if len(rm_files):
+            del_(keys=rm_files)
 
 
 # class Writer(Dataset):
@@ -918,8 +980,8 @@ def cache_dataset(
 
 #     def write(
 #         self,
-#         tables: Union[pa.Table, pd.DataFrame, pl.DataFrame, duckdb.DuckDBPyRelation]
-#         | List[Union[pa.Table, pd.DataFrame, pl.DataFrame, duckdb.DuckDBPyRelation]],
+#         tables: Union[pa.Table, pd.DataFrame, pl_.DataFrame, duckdb.DuckDBPyRelation]
+#         | List[Union[pa.Table, pd.DataFrame, pl_.DataFrame, duckdb.DuckDBPyRelation]],
 #         mode: str = "delta",
 #         batch_size: int | str = 1_000_000,
 #         file_size: str | None = None,
@@ -1066,67 +1128,3 @@ def cache_dataset(
 
 #         if len(rm_files):
 #             _ = run_parallel(delete_file, rm_files, backend="loky")
-
-
-def sync_datasets(dataset1: Dataset, dataset2: Dataset, delete: bool = True):
-    def sync(key: str):
-        m2[key] = m1[key]
-
-    def del_(keys: List[str]):
-        m2.delitems(keys)
-
-    m1 = dataset1._filesystem.get_mapper(dataset1._full_path)
-    m2 = dataset2._filesystem.get_mapper(dataset2._full_path)
-
-    if dataset2.selected_file_details is None:
-        new_files = dataset1.selected_file_details["path"].to_list()
-    else:
-        new_files = (
-            duckdb.from_arrow(
-                dataset1.selected_file_details.select(
-                    ["path", "name", "size"]
-                ).to_arrow()
-            )
-            .except_(
-                duckdb.from_arrow(
-                    dataset2.selected_file_details.select(
-                        ["path", "name", "size"]
-                    ).to_arrow()
-                )
-            )
-            .pl()["path"]
-            .to_list()
-        )
-
-    new_files = [f.split(dataset1._path)[1] for f in new_files]
-    new_files = [f[1:] if f[0] == "/" else f for f in new_files]
-    if len(new_files):
-        _ = run_parallel(
-            sync,
-            new_files,
-            backend="loky",
-        )
-
-    if delete and dataset2.selected_file_details is not None:
-        rm_files = (
-            duckdb.from_arrow(
-                dataset2.selected_file_details.select(
-                    ["path", "name", "size"]
-                ).to_arrow()
-            )
-            .except_(
-                duckdb.from_arrow(
-                    dataset1.selected_file_details.select(
-                        ["path", "name", "size"]
-                    ).to_arrow()
-                )
-            )
-            .pl()["path"]
-            .to_list()
-        )
-
-    rm_files = [f.split(dataset2._path)[1] for f in rm_files]
-    rm_files = [f[1:] if f[0] == "/" else f for f in rm_files]
-
-    if len(rm_files):
-        del_(keys=rm_files)

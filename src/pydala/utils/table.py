@@ -1,4 +1,5 @@
 # %%
+import os
 import re
 from time import strftime
 from typing import Dict, List, Tuple
@@ -7,8 +8,15 @@ import duckdb
 import pandas as pd
 import polars as pl
 import pyarrow as pa
+import pyarrow.csv as pc
+import pyarrow.feather as pf
+import pyarrow.parquet as pq
+import pyarrow.dataset as pds
+from fsspec import filesystem as fsspec_filesystem
+from fsspec.spec import AbstractFileSystem
 
 from .base import sort_as_sql
+from .dataset import get_partitions
 
 
 def get_timedelta_str(timedelta: str, to: str = "polars"):
@@ -62,7 +70,7 @@ def to_arrow(
     | pd.DataFrame
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
-    | pa._dataset.Dataset,
+    | pa.dataset.Dataset,
 ) -> pl.DataFrame:
     """Converts a polars dataframe, pandas dataframe or duckdb relation
     into a pyarrow table/dataset.
@@ -74,7 +82,7 @@ def to_arrow(
     elif isinstance(table, pd.DataFrame):
         return pa.Table.from_pandas(table)
 
-    elif isinstance(table, pa._dataset.Dataset):
+    elif isinstance(table, pa.dataset.Dataset):
         return table
 
     elif isinstance(table, duckdb.DuckDBPyRelation):
@@ -89,7 +97,7 @@ def to_polars(
     | pd.DataFrame
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
-    | pa._dataset.Dataset,
+    | pa.dataset.Dataset,
 ) -> pl.DataFrame:
     """Converts a pyarrow table/dataset, pandas dataframe or duckdb relation
     into a polars dataframe.
@@ -101,7 +109,7 @@ def to_polars(
     elif isinstance(table, pd.DataFrame):
         return pl.from_pandas(table)
 
-    elif isinstance(table, pa._dataset.Dataset):
+    elif isinstance(table, pa.dataset.Dataset):
         return pl.scan_pyarrow_dataset(table)
 
     elif isinstance(table, duckdb.DuckDBPyRelation):
@@ -116,7 +124,7 @@ def to_pandas(
     | pd.DataFrame
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
-    | pa._dataset.Dataset,
+    | pa.dataset.Dataset,
 ) -> pd.DataFrame:
     """Converts a pyarrow table/dataset, polars dataframe or duckdb relation
     into a pandas dataframe
@@ -127,7 +135,7 @@ def to_pandas(
     elif isinstance(table, pl.DataFrame):
         return table.to_pandas()
 
-    elif isinstance(table, pa._dataset.Dataset):
+    elif isinstance(table, pa.dataset.Dataset):
         return table.to_table().to_pandas()
 
     elif isinstance(table, duckdb.DuckDBPyRelation):
@@ -140,7 +148,7 @@ def to_pandas(
 def to_relation(
     table: duckdb.DuckDBPyRelation
     | pa.Table
-    | pa._dataset.Dataset
+    | pa.dataset.Dataset
     | pd.DataFrame
     | pl.DataFrame
     | str,
@@ -160,7 +168,7 @@ def to_relation(
         else:
             return duckdb.from_arrow(table)
 
-    elif isinstance(table, pa._dataset.Dataset):
+    elif isinstance(table, pa.dataset.Dataset):
         if name is not None:
             return duckdb.from_arrow(table).set_alias(name)
         else:
@@ -206,7 +214,7 @@ def sort_table(
     | pd.DataFrame
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
-    | pa._dataset.Dataset,
+    | pa.dataset.Dataset,
     sort_by: str | List[str] | Tuple[str] | None,
     ascending: bool | List[bool] | Tuple[bool] | None,
 ) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
@@ -228,12 +236,12 @@ def sort_table(
             to_polars(table=table).sort(by=sort_by, descending=descending).to_pandas()
         )
 
-    elif isinstance(table, pa._dataset.Dataset):
-        return (
+    elif isinstance(table, pa.dataset.Dataset):
+        return pds.dataset(
             to_polars(table=table)
             .sort(by=sort_by, descending=descending)
             .collect()
-            .to_arrow()
+            .to_arrow(),
         )
 
     elif isinstance(table, pl.DataFrame):
@@ -249,13 +257,13 @@ def get_table_delta(
     | pd.DataFrame
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
-    | pa._dataset.Dataset
+    | pa.dataset.Dataset
     | str,
     table2: pa.Table
     | pd.DataFrame
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
-    | pa._dataset.Dataset
+    | pa.dataset.Dataset
     | str,
     # ddb: duckdb.DuckDBPyConnection,
     subset: list | None = None,
@@ -300,8 +308,13 @@ def get_table_delta(
     else:
         diff = table1_.except_(table2_.project(",".join(table1_.columns)))
 
-    if isinstance(table1, (pa.Table, pa._dataset.Dataset)):
-        return diff.to_arrow() if isinstance(diff, pl.DataFrame) else diff.arrow()
+    if isinstance(table1, (pa.Table, pa.dataset.Dataset)):
+        return (
+            pds.dataset(diff.to_arrow())
+            if isinstance(diff, pl.DataFrame)
+            else pds.dataset(diff.arrow())
+        )
+
     elif isinstance(table1, pd.DataFrame):
         return to_pandas(diff)
 
@@ -320,7 +333,7 @@ def distinct_table(
     | pd.DataFrame
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
-    | pa._dataset.Dataset,
+    | pa.dataset.Dataset,
     # ddb: duckdb.DuckDBPyConnection,
     subset: list | None = None,
     keep: str = "first",
@@ -328,7 +341,7 @@ def distinct_table(
     ascending: bool | List[bool] = True,
     presort: bool = False,
 ) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
-    if isinstance(table, (pa.Table, pd.DataFrame, pl.DataFrame, pa._dataset.Dataset)):
+    if isinstance(table, (pa.Table, pd.DataFrame, pl.DataFrame, pa.dataset.Dataset)):
         table_ = to_polars(table=table)
         if presort and sort_by:
             table_ = sort_table(
@@ -347,8 +360,11 @@ def distinct_table(
 
         if isinstance(table, pd.DataFrame):
             return table_.to_pandas()
-        elif isinstance(table_, (pa.Table, pa._dataset.Dataset)):
+        elif isinstance(table, pa.dataset.Dataset):
+            return pds.dataset(table_.to_arrow())
+        elif isinstance(table, pa.Table):
             return table_.to_arrow()
+
         else:
             return table_
 
@@ -379,7 +395,7 @@ def drop_columns(
     | pd.DataFrame
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
-    | pa._dataset.Dataset,
+    | pa.dataset.Dataset,
     columns: str | List[str] | None = None,
 ) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
     if isinstance(columns, str):
@@ -389,9 +405,11 @@ def drop_columns(
         if isinstance(table, pa.Table):
             if columns := [col for col in columns if col in table.column_names]:
                 return table.drop(columns=columns)
-        elif isinstance(table, (pl.DataFrame, pd.DataFrame)):
+
+        elif isinstance(table, pl.DataFrame | pd.DataFrame):
             if columns := [col for col in columns if col in table.columns]:
                 return table.drop(columns=columns)
+
         elif isinstance(table, duckdb.DuckDBPyRelation):
             columns = [
                 f"'{col}'" if " " in col else col
@@ -400,6 +418,11 @@ def drop_columns(
             ]
             if columns:
                 return table.project(",".join(columns))
+
+        elif isinstance(table, pa.dataset.Dataset):
+            if columns := [col for col in columns if col in table.schema.names]:
+                return pds.dataset(table.to_table().drop(columns))
+
     return table
 
 
@@ -408,7 +431,7 @@ def with_strftime_column(
     | pd.DataFrame
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
-    | pa._dataset.Dataset,
+    | pa.dataset.Dataset,
     timestamp_column: str,
     strftime: str | List[str],
 ):
@@ -552,7 +575,7 @@ def partition_by(
     if isinstance(columns, str):
         columns = [columns]
 
-    drop_columns_ = columns if drop else []
+    drop_columns_ = columns.copy() if drop else []
 
     table_ = table
 
@@ -647,16 +670,12 @@ def partition_by(
         if n_rows:
             table_ = table_.project(f"* exclude(row_nr), row_nr // {n_rows} as row_nr")
 
-        partitions = list(
-            map(
-                tuple,
-                table_.project(", ".join(columns))
-                .pl()
-                .unique(maintain_order=True)
-                .to_numpy()
-                .tolist(),
-            )
-        )
+        partitions = duckdb.from_arrow(
+            table_.project(", ".join(columns))
+            .pl()
+            .unique(maintain_order=True)
+            .to_arrow()
+        ).fetchall()
 
         yield from {
             partition[0]
@@ -667,7 +686,7 @@ def partition_by(
                         " AND ".join(
                             [
                                 f"{col}='{partition_}'"
-                                for col, partition_ in zip(columns, partitions)
+                                for col, partition_ in zip(columns, partition)
                             ]
                         )
                     ),
@@ -697,4 +716,65 @@ def partition_by(
         ]
 
 
-# %%
+def read_table(
+    path: str,
+    schema: pa.Schema | None = None,
+    format: str | None = None,
+    filesystem: AbstractFileSystem | None = None,
+    partitioning: str | List[str] | None = None,
+) -> pa.Table:
+    if filesystem is None:
+        filesystem = fsspec_filesystem("file")
+
+    format = format or os.path.splitext(path)[-1]
+
+    if re.sub("\.", "", format) == "parquet":
+        table = pq.read_table(
+            pa.BufferReader(filesystem.read_bytes(path)), schema=schema
+        )
+
+    elif re.sub("\.", "", format) == "csv":
+        table = pc.read_csv(pa.BufferReader(filesystem.read_bytes(path)), schema=schema)
+
+    elif re.sub("\.", "", format) in ["arrow", "ipc", "feather"]:
+        table = pf.read_table(
+            pa.BufferReader(filesystem.read_bytes(path)), schema=schema
+        )
+
+    if partitioning is not None:
+        partitions = get_partitions(path, partitioning=partitioning)
+
+        for key, values in partitions:
+            table = table.append_colum(key, [values] * len(table))
+
+    return table
+
+
+def write_table(
+    table: pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation,
+    path: str,
+    schema: pa.Schema | None = None,
+    format: str | None = None,
+    filesystem: AbstractFileSystem | None = None,
+    **kwargs,
+):
+    if filesystem is None:
+        filesystem = fsspec_filesystem("file")
+
+    table = to_arrow(table)
+    format = format or os.path.splitext(path)[-1]
+    schema = kwargs.pop(schema, None) or schema or table.schema
+
+    if re.sub("\.", "", format) == "parquet":
+        pq.write_table(table, path, filesystem=filesystem, **kwargs)
+
+    elif re.sub("\.", "", format) == "csv":
+        with filesystem.open_output_stream(path) as f:
+            table = pa.table.from_batches(table.to_batches(), schema=schema)
+            pc.write_csv(table, f, **kwargs)
+
+    elif re.sub("\.", "", format) in ["arrow", "ipc", "feather"]:
+        compression = kwargs.pop("compression", None) or "uncompressed"
+        with filesystem.open_output_scream(path) as f:
+            table = pa.table.from_batches(table.to_batches(), schema=schema)
+            pf.write_feather(f, compression=compression, **kwargs)

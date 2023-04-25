@@ -103,3 +103,54 @@ def get_file_details(
     details = pl.from_pandas(details.reset_index())
     return details
 
+
+def get_partitions(path: str, partitioning: str | List[str] | None = None):
+    if "." in path:
+        path = os.path.dirname(path)
+
+    parts = path.split("/")
+
+    if isinstance(partitioning, str):
+        if partitioning == "hive":
+            return [tuple(p.split("=")) for p in parts if "=" in p]
+
+        else:
+            return [
+                (partitioning, parts[0]),
+            ]
+    else:
+        return list(zip(partitioning, parts[-len(partitioning) :]))
+
+
+def sync_datasets(
+    filesystem1: AbstractFileSystem,
+    path1: str,
+    filesystem2: AbstractFileSystem,
+    path2: str | None = None,
+    keys: str | None = None,
+    delete: bool = True,
+):
+    def sync(key: str):
+        m2[key] = m1[key]
+
+    def del_(keys: List[str]):
+        m2.delitems(keys)
+
+    m1 = filesystem1.get_mapper(path1)
+    m2 = filesystem2.get_mapper(path2)
+
+    if keys is None:
+        keys = list(m1.keys())
+
+    if len(keys):
+        _ = run_parallel(
+            sync,
+            keys,
+            backend="loky",
+        )
+
+    if delete and len(m2.keys()):
+        rm_keys = [k for k in m2 not in keys]
+
+        if len(rm_keys):
+            del_(keys=rm_keys)
