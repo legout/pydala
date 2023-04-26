@@ -16,21 +16,16 @@ from fsspec.spec import AbstractFileSystem
 from fsspec.utils import infer_storage_options
 from zmq import has
 
-from ..utils.base import humanize_size, random_id, run_parallel
-from ..utils.dataset import (
-    get_arrow_schema,
-    get_file_details,
-    get_unified_schema,
-    sync_datasets as sync_datasets_,
-)
-from ..utils.schema import convert_schema, sort_schema, unify_schema
-from ..utils.table import (
+from ..utils import humanize_size, run_parallel, humanized_size_to_bytes
+from .utils.dataset import get_arrow_schema, get_file_details, get_unified_schema
+from .utils.schema import convert_schema, sort_schema
+from .utils.table import (
     distinct_table,
     get_table_delta,
     partition_by,
+    read_table,
     sort_table,
     to_arrow,
-    read_table,
     write_table,
 )
 
@@ -294,14 +289,18 @@ class Dataset(BaseDataset):
 
     def select_files(
         self,
-        start_time: dt.datetime | str | None = None,
-        end_time: dt.datetime | str | None = None,
-        min_file_size: int | str | None = None,
-        max_file_size: int | str | None = None,
-        min_last_modified: dt.datetime | str | None = None,
-        max_last_modified: dt.datetime | str | None = None,
-        min_row_count: int | None = None,
-        max_row_count: int | None = None,
+        time_range: dt.datetime
+        | str
+        | List[str, None]
+        | List[dt.datetime, None]
+        | None = None,
+        file_size: int | str | List[int, None] | List[str, None] | None = None,
+        last_modified: dt.datetime
+        | str
+        | List[str, None]
+        | List[dt.datetime, None]
+        | None = None,
+        row_count: int | List[int, None] | None = None,
     ):
         self._check_path_exists()
 
@@ -315,11 +314,39 @@ class Dataset(BaseDataset):
         file_details = self.file_details
         filter_ = []
 
+        if time_range is None:
+            start_time = None
+            end_time = None
+
+        elif isinstance(time_range, str | dt.datetime):
+            start_time = time_range
+            end_time = None
+
+        else:
+            start_time, end_time = time_range
+
         if start_time:
             filter_.append(f"timestamp_max>='{start_time}'")
 
         if end_time:
             filter_.append(f"timestamp_min<='{end_time}'")
+
+        if file_size is None:
+            min_file_size = None
+            max_file_size = None
+
+        elif isinstance(file_size, str | int):
+            min_file_size = None
+            max_file_size = file_size
+
+        else:
+            min_file_size, max_file_size = file_size
+
+        if isinstance(min_file_size, str):
+            min_file_size = humanized_size_to_bytes(min_file_size)
+
+        if isinstance(max_file_size, str):
+            max_file_size = humanized_size_to_bytes(max_file_size)
 
         if min_file_size:
             filter_.append(f"size>={min_file_size}")
@@ -327,11 +354,33 @@ class Dataset(BaseDataset):
         if max_file_size:
             filter_.append(f"size<={max_file_size}")
 
+        if last_modified is None:
+            min_last_modified = None
+            max_last_modified = None
+
+        elif isinstance(last_modified, str | dt.datetime):
+            min_last_modified = last_modified
+            max_last_modified = None
+
+        else:
+            min_last_modified, max_last_modified = last_modified
+
         if min_last_modified:
             filter_.append(f"last_modified>='{min_last_modified}'")
 
         if max_last_modified:
             filter_.append(f"last_modified<='{max_last_modified}'")
+
+        if row_count is None:
+            min_row_count = None
+            max_row_count = None
+
+        elif isinstance(row_count, str | int):
+            min_row_count = None
+            max_row_count = row_count
+
+        else:
+            min_row_count, max_row_count = row_count
 
         if min_row_count:
             filter_.append(f"row_count>={min_row_count}")
@@ -349,14 +398,18 @@ class Dataset(BaseDataset):
 
     def _load_arrow_dataset(
         self,
-        start_time: dt.datetime | str | None = None,
-        end_time: dt.datetime | str | None = None,
-        min_file_size: int | str | None = None,
-        max_file_size: int | str | None = None,
-        min_last_modified: dt.datetime | str | None = None,
-        max_last_modified: dt.datetime | str | None = None,
-        min_row_count: int | None = None,
-        max_row_count: int | None = None,
+        time_range: dt.datetime
+        | str
+        | List[str, None]
+        | List[dt.datetime, None]
+        | None = None,
+        file_size: int | str | List[int, None] | List[str, None] | None = None,
+        last_modified: dt.datetime
+        | str
+        | List[str, None]
+        | List[dt.datetime, None]
+        | None = None,
+        row_count: int | List[int, None] | None = None,
         **kwargs,
     ):
         self._check_path_exists()
@@ -369,14 +422,10 @@ class Dataset(BaseDataset):
             self._set_file_details()
 
         self.select_files(
-            start_time=start_time,
-            end_time=end_time,
-            min_file_size=min_file_size,
-            max_file_size=max_file_size,
-            min_last_modified=min_last_modified,
-            max_last_modified=max_last_modified,
-            min_row_count=min_row_count,
-            max_row_count=max_row_count,
+            time_range=time_range,
+            file_size=file_size,
+            last_modified=last_modified,
+            row_count=row_count,
         )
 
         self._arrow_dataset = pds.dataset(
@@ -397,7 +446,9 @@ class Dataset(BaseDataset):
     def is_materialized(self):
         return hasattr(self, "_arrow_table")
 
-    def materialize(self, *args, combine_chunks: bool = True, **kwargs):
+    def materialize(
+        self, *args, combine_chunks: bool = False, chunk_size=1_000_000, **kwargs
+    ):
         if args or kwargs or not hasattr(self, "_arrow_table"):
             if args or kwargs:
                 self.select_files(*args, **kwargs)
@@ -413,6 +464,13 @@ class Dataset(BaseDataset):
                     backend="threading",
                 )
             )
+
+            if combine_chunks:
+                self._arrow_table = self._arrow_table.combine_chunks()
+            elif chunk_size:
+                self._arrow_table = pa.table.from_batches(
+                    self._arrow_table.to_batches(max_chunksize=chunk_size)
+                )
 
             self.register("arrow_table", self._arrow_table)
             self._del(pl=True, df=True, ddb_rel=True)
@@ -837,27 +895,6 @@ class Dataset(BaseDataset):
             self._del(pl=True, df=True, ddb_rel=True, ddb_table=True)
 
 
-def cache_dataset(
-    dataset: Dataset,
-    cache_base_dir: str = "/tmp/pydala",
-    ddb: duckdb.DuckDBPyConnection | None = None,
-):
-    cache_dataset_ = Dataset(
-        path=dataset._path,
-        bucket=cache_base_dir,
-        format=dataset._format,
-        partitioning=dataset._partitioning,
-        filesystem=fsspec_filesystem(protocol="file"),
-        timestamp_column=dataset._timestamp_column,
-        name=dataset.name,
-        ddb=ddb,
-    )
-    sync_datasets(dataset1=dataset, dataset2=cache_dataset_, delete=True)
-
-    cache_dataset_.reload()
-    return cache_dataset_
-
-
 def write_dataset(
     tables: pa.Table
     | pl_.DataFrame
@@ -873,71 +910,6 @@ def write_dataset(
     batch,
 ):
     pass
-
-
-def sync_datasets(dataset1: Dataset, dataset2: Dataset, delete: bool = True):
-    def sync(key: str):
-        m2[key] = m1[key]
-
-    def del_(keys: List[str]):
-        m2.delitems(keys)
-
-    m1 = dataset1._filesystem.get_mapper(dataset1._full_path)
-    m2 = dataset2._filesystem.get_mapper(dataset2._full_path)
-
-    if dataset2.selected_file_details is None:
-        new_files = dataset1.selected_file_details["path"].to_list()
-    else:
-        new_files = (
-            duckdb.from_arrow(
-                dataset1.selected_file_details.select(
-                    ["path", "name", "size"]
-                ).to_arrow()
-            )
-            .except_(
-                duckdb.from_arrow(
-                    dataset2.selected_file_details.select(
-                        ["path", "name", "size"]
-                    ).to_arrow()
-                )
-            )
-            .pl()["path"]
-            .to_list()
-        )
-
-    new_files = [f.split(dataset1._path)[1] for f in new_files]
-    new_files = [f[1:] if f[0] == "/" else f for f in new_files]
-
-    if len(new_files):
-        _ = run_parallel(
-            sync,
-            new_files,
-            backend="loky",
-        )
-
-    if delete and dataset2.selected_file_details is not None:
-        rm_files = (
-            duckdb.from_arrow(
-                dataset2.selected_file_details.select(
-                    ["path", "name", "size"]
-                ).to_arrow()
-            )
-            .except_(
-                duckdb.from_arrow(
-                    dataset1.selected_file_details.select(
-                        ["path", "name", "size"]
-                    ).to_arrow()
-                )
-            )
-            .pl()["path"]
-            .to_list()
-        )
-
-        rm_files = [f.split(dataset2._path)[1] for f in rm_files]
-        rm_files = [f[1:] if f[0] == "/" else f for f in rm_files]
-
-        if len(rm_files):
-            del_(keys=rm_files)
 
 
 # class Writer(Dataset):

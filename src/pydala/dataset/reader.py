@@ -1,63 +1,144 @@
+from .dataset import Dataset
 import duckdb
+from fsspec import filesystem as fsspec_filesystem
+from .sync import sync_datasets
 import pyarrow as pa
-import pyarrow.dataset as pads
-from fsspec import spec
-from pyarrow.fs import FileSystem
-
-from .base import Dataset
-from ..utils.dataset import get_unified_schema, pyarrow_schema_from_dict
+from fsspec.spec import AbstractFileSystem
+from typing import List, Dict
+import pyarrow.dataset as pds
+import datetime as dt
 
 
-class Reader(Dataset):
-    def __init__(
-        self,
-        path: str,
-        bucket: str | None = None,
-        schema: pa.Schema | None = None,
-        format: str = "parquet",
-        filesystem: spec.AbstractFileSystem | FileSystem | None = None,
-        partitioning: pads.Partitioning | list | str | None = None,
-        exclude_invalid_files: bool = True,
-        ddb: duckdb.DuckDBPyConnection | None = None,
-    ) -> None:
-        super().__init__(
-            path,
-            bucket,
-            schema,
-            format,
-            filesystem,
-            partitioning,
-            exclude_invalid_files,
-            ddb,
-        )
+def filesystem_dataset(
+    path: str,
+    bucket: str | None = None,
+    schema: pa.Schema | Dict[str, str] | None = None,
+    format: str = "parquet",
+    filesystem: AbstractFileSystem | None = None,
+    partitioning: pds.Partitioning | List[str] | str | None = None,
+    timestamp_column: str | None = None,
+    ddb: duckdb.DuckDBPyConnection | None = None,
+    name: str | None = None,
+    time_range: dt.datetime
+    | str
+    | List[str, None]
+    | List[dt.datetime, None]
+    | None = None,
+    file_size: int | str | List[int, None] | List[str, None] | None = None,
+    last_modified: dt.datetime
+    | str
+    | List[str, None]
+    | List[dt.datetime, None]
+    | None = None,
+    row_count: int | List[int, None] | None = None,
+    materialize: bool = False,
+    combine_chunks: bool = False,
+    chunk_size: int = 1_000_000,
+    **storage_options,
+) -> Dataset:
+    ds = Dataset(
+        path=path,
+        bucket=bucket,
+        schema=schema,
+        format=format,
+        filesystem=filesystem,
+        partitioning=partitioning,
+        timestamp_column=timestamp_column,
+        ddb=ddb,
+        name=name,
+        *storage_options,
+    )
 
-        self._dataset = pads.dataset(
-            source=path,
-            schema=schema,
-            format=format,
-            filesystem=self._filesystem,
-            partitioning=partitioning,
-            exclude_invalid_files=exclude_invalid_files,
-        )
+    ds._load_arrow_dataset(
+        time_range=time_range,
+        file_size=file_size,
+        last_modified=last_modified,
+        row_count=row_count,
+    )
 
-        self._files = self._dataset.files
-        
-        self._is_empty = len(self._files)>0
-        self._is_file = len(self._files)==1
-       
+    if materialize:
+        ds.materialize(combine_chunks=combine_chunks, chunk_size=chunk_size)
 
-    def get_unified_schema(self):
-        return get_unified_schema(dataset=self._dataset)
-    
-    def set_schema(self, schema:pa.Schema|None=None):
-        
-        if schema is None:
-            schema, schema_equal = self.get_unified_schema()
-            
-        self._schema = schema
-        
-    def _gen_name(self, name: str | None):
-        return f"{self._name}_{name}" if self._name else name
-    
-    
-    
+    return ds
+
+
+def cache_dataset(
+    dataset: Dataset,
+    cache_base_dir: str = "/tmp/pydala",
+) -> Dataset:
+    cache_dataset_ = filesystem_dataset(
+        path=dataset._path,
+        bucket=cache_base_dir,
+        format=dataset._format,
+        partitioning=dataset._partitioning,
+        filesystem=fsspec_filesystem(protocol="file"),
+        timestamp_column=dataset._timestamp_column,
+        name=dataset.name + "_cache_",
+        ddb=dataset.ddb,
+    )
+    sync_datasets(dataset1=dataset, dataset2=cache_dataset_, delete=True)
+
+    cache_dataset_.reload()
+    return cache_dataset_
+
+
+def dataset(
+    path: str,
+    bucket: str | None = None,
+    schema: pa.Schema | Dict[str, str] | None = None,
+    format: str = "parquet",
+    filesystem: AbstractFileSystem | None = None,
+    partitioning: pds.Partitioning | List[str] | str | None = None,
+    timestamp_column: str | None = None,
+    ddb: duckdb.DuckDBPyConnection | None = None,
+    name: str | None = None,
+    time_range: dt.datetime
+    | str
+    | List[str, None]
+    | List[dt.datetime, None]
+    | None = None,
+    file_size: int | str | List[int, None] | List[str, None] | None = None,
+    last_modified: dt.datetime
+    | str
+    | List[str, None]
+    | List[dt.datetime, None]
+    | None = None,
+    row_count: int | List[int, None] | None = None,
+    materialize: bool = False,
+    combine_chunks: bool = False,
+    chunk_size: int = 1_000_000,
+    cached: bool = False,
+    cache_base_dir: str = "/tmp/pydala",
+    **storage_options,
+) -> Dataset:
+    if cached:
+        materialize_fs = False
+    else:
+        materialize_fs = materialize
+
+    ds = filesystem_dataset(
+        path=path,
+        bucket=bucket,
+        schema=schema,
+        format=format,
+        filesystem=filesystem,
+        partitioning=partitioning,
+        timestamp_column=timestamp_column,
+        ddb=ddb,
+        name=name,
+        time_range=time_range,
+        file_size=file_size,
+        last_modified=last_modified,
+        row_count=row_count,
+        materialize=materialize_fs,
+        combine_chunks=combine_chunks,
+        chunk_size=chunk_size,
+        **storage_options,
+    )
+    if cached:
+        ds = cache_dataset(dataset=ds, cache_base_dir=cache_base_dir)
+        if materialize:
+            ds.materialize(combine_chunks=combine_chunks, chunk_size=chunk_size)
+        return ds
+
+    return ds

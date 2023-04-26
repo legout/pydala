@@ -1,11 +1,10 @@
-import logging
 import random
+import re
 import string
-import sys
-from loguru import logger
-from typing import List, Tuple, Callable, Any
-from joblib import Parallel, delayed
+from typing import Any, Callable, List, Tuple
+
 import tqdm
+from joblib import Parallel, delayed
 
 
 def sort_as_sql(
@@ -60,6 +59,24 @@ def humanize_size(size: int, unit="MB") -> float:
         return round(size / 1024**4, 1)
     elif unit.lower() == "pb":
         return round(size / 1024**5, 1)
+
+
+def humanized_size_to_bytes(size: str) -> float:
+    "Human-readable size t bytes"
+    unit = re.sub("[0-9 ]", "", size).lower()
+    size = float(re.sub("[a-zA-Z ]", "", size))
+    if unit == "b":
+        return int(size)
+    elif unit == "kb":
+        return int(size * 1024)
+    elif unit == "mb":
+        return int(size * 1024**2)
+    elif unit == "gb":
+        return int(size * 1024**3)
+    elif unit == "tb":
+        return int(size * 1024**4)
+    elif unit == "pb":
+        return int(size * 1024**5)
 
 
 def run_parallel(
