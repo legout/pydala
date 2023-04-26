@@ -46,8 +46,9 @@ class BaseDataset:
     ):
         so = infer_storage_options(path)
         self._protocol = storage_options.pop("protocol", None) or so["protocol"]
+        bucket = bucket or ""
         self._path = so["path"].replace(bucket, "")
-        self._bucket = bucket or ""
+        self._bucket = (bucket,)
         self._full_path = os.path.join(self._bucket, self._path)
         self._uri = (
             os.path.join(f"{self._protocol}://", self._full_path)
@@ -821,6 +822,10 @@ class Dataset(BaseDataset):
         | List[duckdb.DuckDBPyRelation],
         mode: str = "delta",
         subset: str | List[str] | None = None,
+        sort_by: str | List[str] | None = None,
+        ascending: bool | List[bool] = True,
+        distinct: bool = False,
+        keep: str = "first",
     ):
         if isinstance(table, list | tuple):
             if isinstance(table[0], pds.Dataset):
@@ -874,6 +879,13 @@ class Dataset(BaseDataset):
 
         table = to_arrow(table)
 
+        if sort_by:
+            table = sort_table(table, sort_by=sort_by, ascending=ascending)
+        if distinct:
+            table = distinct_table(table, subset=subset, keep=keep)
+
+        self._delta_table = table
+
         if len(table):
             if not self._has_arrow_dataset:
                 self._arrow_dataset = pds.dataset(table)
@@ -893,23 +905,6 @@ class Dataset(BaseDataset):
                 ) if self.name else self.register("arrow_table", self._arrow_table)
 
             self._del(pl=True, df=True, ddb_rel=True, ddb_table=True)
-
-
-def write_dataset(
-    tables: pa.Table
-    | pl_.DataFrame
-    | pd.DataFrame
-    | pa.dataset.Dataset
-    | duckdb.DuckDBPyRelation
-    | List[pa.Table]
-    | List[pl_.DataFrame]
-    | List[pd.DataFrame]
-    | List[pa.dataset.Dataset]
-    | List[duckdb.DuckDBPyRelation],
-    path: str,
-    batch,
-):
-    pass
 
 
 # class Writer(Dataset):

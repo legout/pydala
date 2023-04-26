@@ -9,13 +9,13 @@ import pandas as pd
 import polars as pl
 import pyarrow as pa
 import pyarrow.csv as pc
+import pyarrow.dataset as pds
 import pyarrow.feather as pf
 import pyarrow.parquet as pq
-import pyarrow.dataset as pds
 from fsspec import filesystem as fsspec_filesystem
 from fsspec.spec import AbstractFileSystem
 
-from .base import sort_as_sql
+from ...utils import sort_as_sql
 from .dataset import get_partitions
 
 
@@ -745,7 +745,9 @@ def read_table(
         partitions = get_partitions(path, partitioning=partitioning)
 
         for key, values in partitions:
-            table = table.append_column(field_=key, column=pa.array([values] * len(table)))
+            table = table.append_column(
+                field_=key, column=pa.array([values] * len(table))
+            )
 
     return table
 

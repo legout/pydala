@@ -7,7 +7,7 @@ import pyarrow as pa
 from fsspec.implementations.arrow import ArrowFSWrapper
 from fsspec.spec import AbstractFileSystem
 
-from .base import run_parallel
+from ...utils import run_parallel
 from .schema import unify_schema
 
 
