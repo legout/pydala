@@ -4,7 +4,9 @@ import polars as pl
 import pyarrow as pa
 
 
-def _unify_schema_pyarrow(schema1: pa.Schema, schema2: pa.Schema) -> Tuple[dict, bool]:
+def _get_unify_schema_pyarrow(
+    schema1: pa.Schema, schema2: pa.Schema
+) -> Tuple[dict, bool]:
     """Returns a unified pyarrow schema.
 
     Args:
@@ -64,7 +66,7 @@ def _unify_schema_pyarrow(schema1: pa.Schema, schema2: pa.Schema) -> Tuple[dict,
     return pa.schema(unified_schema), schemas_equal
 
 
-def _unify_schema_polars(schema1: dict, schema2: dict) -> Tuple[dict, bool]:
+def _get_unify_schema_polars(schema1: dict, schema2: dict) -> Tuple[dict, bool]:
     """Returns a unified polars schema.
 
     Args:
@@ -112,7 +114,7 @@ def _unify_schema_polars(schema1: dict, schema2: dict) -> Tuple[dict, bool]:
     return unified_schema, schemas_equal
 
 
-def unify_schema(
+def get_unify_schema(
     schema1: pa.Schema | dict, schema2: pa.Schema | dict
 ) -> Tuple[pa.Schema, bool] | Tuple[dict, bool]:
     """Returns a unified pyarrow or polars schema.
@@ -125,9 +127,9 @@ def unify_schema(
         Tuple[pa.Schema, bool] | Tuple[dict, bool]: unified pyarrow or polars schema and
     """
     unified_schema, schemas_equal = (
-        _unify_schema_pyarrow(schema1, schema2)
+        _get_unify_schema_pyarrow(schema1, schema2)
         if isinstance(schema1, pa.Schema)
-        else _unify_schema_polars(schema1, schema2)
+        else _get_unify_schema_polars(schema1, schema2)
     )
     return unified_schema, schemas_equal
 
@@ -215,6 +217,24 @@ def _convert_schema_pyarrow_to_polars(schema: pa.Schema) -> dict:
 
 def _convert_schema_polars_to_pyarrow(schema: dict) -> pa.Schema:
     return pa.Schema([pa.field(name, dtype) for name, dtype in schema.items()])
+
+
+def _convert_schema_polars_to_pandas(schema: dict) -> dict:
+    schema = _convert_schema_polars_to_pyarrow(schema)
+    return _convert_schema_pyarrow_to_pandas(schema)
+
+
+def _convert_schema_pyarrow_to_pandas(schema: pa.schema) -> dict:
+    return {n: t.to_pandas_dtype() for n, t in zip(schema.names, schema.types)}
+
+
+def _convert_schema_pandas_to_pyarrow(schema: dict) -> pa.Schema:
+    return pa.Schema([pa.field(name, dtype) for name, dtype in schema.items()])
+
+
+def _convert_schema_pandas_to_polars(schema: dict) -> dict:
+    schema = _convert_schema_pandas_to_pyarrow(schema)
+    return _convert_schema_pyarrow_to_polars(schema)
 
 
 def convert_schema(schema: pa.Schema | dict) -> dict | pa.Schema:

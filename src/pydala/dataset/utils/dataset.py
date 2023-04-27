@@ -8,7 +8,7 @@ from fsspec.implementations.arrow import ArrowFSWrapper
 from fsspec.spec import AbstractFileSystem
 
 from ...utils import run_parallel
-from .schema import unify_schema
+from .schema import get_unify_schema
 
 
 def get_arrow_schema(dataset: pa.dataset.Dataset) -> Dict[str, pa.Schema]:
@@ -28,7 +28,7 @@ def get_unified_schema(
     all_schemas = list(schemas.values()) if isinstance(schemas, dict) else schemas
     unified_schema = all_schemas[0]
     for schema in all_schemas[1:]:
-        unified_schema, schemas_equal_ = unify_schema(unified_schema, schema)
+        unified_schema, schemas_equal_ = get_unify_schema(unified_schema, schema)
 
         schemas_equal *= schemas_equal_
 
@@ -104,7 +104,7 @@ def get_file_details(
     return details
 
 
-def get_partitions(path: str, partitioning: str | List[str] | None = None):
+def get_partitions_from_path(path: str, partitioning: str | List[str] | None = None):
     if "." in path:
         path = os.path.dirname(path)
 

@@ -27,7 +27,7 @@ from .utils.table import (
     sort_table,
     to_arrow,
     write_table,
-    get_timestamp_column
+    get_timestamp_column,
 )
 
 
@@ -148,141 +148,6 @@ class BaseDataset:
             self.selected_file_details = None
             self.size = 0
             self.size_h = 0
-
-    @property
-    def arrow_schemas(self):
-        if self._base_dataset is None:
-            self._set_base_dataset()
-            if self._base_dataset:
-                return None
-        if not hasattr(self, "_arrow_schemas"):
-            self._arrow_schemas = get_arrow_schema(self._base_dataset)
-
-        return self._arrow_schemas
-
-    @property
-    def pl_schemas(self):
-        if self._base_dataset is None:
-            self._set_base_dataset()
-            if self._base_dataset:
-                return None
-        if not hasattr(self, "_pl_schemas"):
-            self._pl_schemas = {
-                f: convert_schema(schema) for f, schema in self.arrow_schemas
-            }
-        return self._pl_schemas
-
-    @property
-    def schemas(self):
-        return self.arrow_schemas
-
-    @property
-    def arrow_schema(self):
-        if self._base_dataset is None:
-            self._set_base_dataset()
-            if self._base_dataset:
-                return None
-        if not hasattr(self, "_arrow_schema"):
-            self._arrow_schema, self._schemas_equal = get_unified_schema(
-                self.arrow_schemas
-            )
-
-        return self._arrow_schema
-
-    @property
-    def pl_schema(self):
-        if self._base_dataset is None:
-            self._set_base_dataset()
-            if self._base_dataset:
-                return None
-        if not hasattr(self, "_pl_schema"):
-            self._pl_schema = convert_schema(self.arrow_schema)
-        return self._pl_schema
-
-    @property
-    def schema(self):
-        return self.arrow_schema
-
-    @property
-    def schemas_equal(self):
-        if self._base_dataset is None:
-            return None
-        if not hasattr(self, "_schemas_equal"):
-            self._arrow_schema, self._schemas_equal = get_unified_schema(
-                self.arrow_schemas
-            )
-        return self._schemas_equal
-
-    @property
-    def arrow_schema_sorted(self):
-        if self._base_dataset is None:
-            self._set_base_dataset()
-            if self._base_dataset:
-                return None
-        if not hasattr(self, "_arrow_schema_sorted"):
-            self._arrow_schema_sorted = sort_schema(self.arrow_schema)
-        return self._arrow_schema_sorted
-
-    @property
-    def pl_schema_sorted(self):
-        if self._base_dataset is None:
-            self._set_base_dataset()
-            if self._base_dataset:
-                return None
-        if not hasattr(self, "_pl_schema_sorted"):
-            self._pl_schema_sorted = sort_schema(self.pl_schema)
-        return self._pl_schema_sorted
-
-    @property
-    def schema_sorted(self):
-        return self.arrow_schema_sorted
-
-    def repair_schema(self):
-        def _repair_schema(path):
-            schema = self.schemas[path]
-            if schema != self.schema:
-                table = read_table(
-                    path=path, schema=self.schema, filesystem=self._dir_filesystem
-                )
-                write_table(
-                    table=table,
-                    path=path,
-                    # schema=self.schema,
-                    filesystem=self._dir_filesystem,
-                )
-
-        if self.schemas_equal:
-            return
-        else:
-            run_parallel(_repair_schema, self.schemas, backend="threading")
-
-
-class Dataset(BaseDataset):
-    def __init__(
-        self,
-        path: str,
-        bucket: str | None = None,
-        schema: pa.Schema | Dict[str, str] | None = None,
-        format: str = "parquet",
-        filesystem: AbstractFileSystem | None = None,
-        partitioning: pds.Partitioning | List[str] | str | None = None,
-        timestamp_column: str | None = None,
-        ddb: duckdb.DuckDBPyConnection | None = None,
-        name: str | None = None,
-        **storage_options,
-    ):
-        super().__init__(
-            path=path,
-            bucket=bucket,
-            schema=schema,
-            format=format,
-            filesystem=filesystem,
-            partitioning=partitioning,
-            timestamp_column=timestamp_column,
-            ddb=ddb,
-            name=name,
-            **storage_options,
-        )
 
     def select_files(
         self,
@@ -438,6 +303,141 @@ class Dataset(BaseDataset):
         )
 
         self.register("arrow_dataset", self._arrow_dataset)
+
+    @property
+    def arrow_schemas(self):
+        if self._base_dataset is None:
+            self._set_base_dataset()
+            if self._base_dataset:
+                return None
+        if not hasattr(self, "_arrow_schemas"):
+            self._arrow_schemas = get_arrow_schema(self._base_dataset)
+
+        return self._arrow_schemas
+
+    @property
+    def pl_schemas(self):
+        if self._base_dataset is None:
+            self._set_base_dataset()
+            if self._base_dataset:
+                return None
+        if not hasattr(self, "_pl_schemas"):
+            self._pl_schemas = {
+                f: convert_schema(schema) for f, schema in self.arrow_schemas
+            }
+        return self._pl_schemas
+
+    @property
+    def schemas(self):
+        return self.arrow_schemas
+
+    @property
+    def arrow_schema(self):
+        if self._base_dataset is None:
+            self._set_base_dataset()
+            if self._base_dataset:
+                return None
+        if not hasattr(self, "_arrow_schema"):
+            self._arrow_schema, self._schemas_equal = get_unified_schema(
+                self.arrow_schemas
+            )
+
+        return self._arrow_schema
+
+    @property
+    def pl_schema(self):
+        if self._base_dataset is None:
+            self._set_base_dataset()
+            if self._base_dataset:
+                return None
+        if not hasattr(self, "_pl_schema"):
+            self._pl_schema = convert_schema(self.arrow_schema)
+        return self._pl_schema
+
+    @property
+    def schema(self):
+        return self.arrow_schema
+
+    @property
+    def schemas_equal(self):
+        if self._base_dataset is None:
+            return None
+        if not hasattr(self, "_schemas_equal"):
+            self._arrow_schema, self._schemas_equal = get_unified_schema(
+                self.arrow_schemas
+            )
+        return self._schemas_equal
+
+    @property
+    def arrow_schema_sorted(self):
+        if self._base_dataset is None:
+            self._set_base_dataset()
+            if self._base_dataset:
+                return None
+        if not hasattr(self, "_arrow_schema_sorted"):
+            self._arrow_schema_sorted = sort_schema(self.arrow_schema)
+        return self._arrow_schema_sorted
+
+    @property
+    def pl_schema_sorted(self):
+        if self._base_dataset is None:
+            self._set_base_dataset()
+            if self._base_dataset:
+                return None
+        if not hasattr(self, "_pl_schema_sorted"):
+            self._pl_schema_sorted = sort_schema(self.pl_schema)
+        return self._pl_schema_sorted
+
+    @property
+    def schema_sorted(self):
+        return self.arrow_schema_sorted
+
+    def repair_schema(self):
+        def _repair_schema(path):
+            schema = self.schemas[path]
+            if schema != self.schema:
+                table = read_table(
+                    path=path, schema=self.schema, filesystem=self._dir_filesystem
+                )
+                write_table(
+                    table=table,
+                    path=path,
+                    # schema=self.schema,
+                    filesystem=self._dir_filesystem,
+                )
+
+        if self.schemas_equal:
+            return
+        else:
+            run_parallel(_repair_schema, self.schemas, backend="threading")
+
+
+class Dataset(BaseDataset):
+    def __init__(
+        self,
+        path: str,
+        bucket: str | None = None,
+        schema: pa.Schema | Dict[str, str] | None = None,
+        format: str = "parquet",
+        filesystem: AbstractFileSystem | None = None,
+        partitioning: pds.Partitioning | List[str] | str | None = None,
+        timestamp_column: str | None = None,
+        ddb: duckdb.DuckDBPyConnection | None = None,
+        name: str | None = None,
+        **storage_options,
+    ):
+        super().__init__(
+            path=path,
+            bucket=bucket,
+            schema=schema,
+            format=format,
+            filesystem=filesystem,
+            partitioning=partitioning,
+            timestamp_column=timestamp_column,
+            ddb=ddb,
+            name=name,
+            **storage_options,
+        )
 
     @property
     def is_materialized(self):
@@ -622,7 +622,7 @@ class Dataset(BaseDataset):
     @property
     def df(self):
         if not self._has_df:
-            self._df = self.ddb_rel.df()
+            self._df = self.ddb_rel.arrow().to_pandas(types_mapper=pd.ArrowDtype)
 
         return self._df
 

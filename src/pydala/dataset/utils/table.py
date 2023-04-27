@@ -17,7 +17,15 @@ from fsspec import filesystem as fsspec_filesystem
 from fsspec.spec import AbstractFileSystem
 
 from ...utils import sort_as_sql
-from .dataset import get_partitions
+from .dataset import get_partitions_from_path
+from .schema import (
+    _convert_schema_pyarrow_to_polars,
+    _convert_schema_pandas_to_polars,
+    _convert_schema_pandas_to_pyarrow,
+    _convert_schema_polars_to_pandas,
+    _convert_schema_polars_to_pyarrow,
+    _convert_schema_pyarrow_to_pandas,
+)
 
 
 def get_timedelta_str(timedelta: str, to: str = "polars") -> str:
@@ -77,7 +85,7 @@ def get_timestamp_column(
         table = table.limit(10)
 
     table = to_arrow(table)
-    
+
     return [col.name for col in table.schema if isinstance(col.type, pa.TimestampType)][
         0
     ]
@@ -148,16 +156,16 @@ def to_pandas(
     into a pandas dataframe
     """
     if isinstance(table, pa.Table):
-        return table.to_pandas()
+        return table.to_pandas(types_mapper=pd.ArrowDtype)
 
     elif isinstance(table, pl.DataFrame):
-        return table.to_pandas()
+        return table.to_pandas(use_pyarrow_extension_array=True)
 
     elif isinstance(table, pa.dataset.Dataset):
-        return table.to_table().to_pandas()
+        return table.to_table().to_pandas(types_mapper=pd.ArrowDtype)
 
     elif isinstance(table, duckdb.DuckDBPyRelation):
-        return table.df()
+        return table.arrow().to_pandas(types_mapper=pd.ArrowDtype)
 
     else:
         return table
@@ -172,58 +180,59 @@ def to_relation(
     | str,
     # ddb: duckdb.DuckDBPyConnection | None = None,
     name: str | None = None,
+    ddb:duckdb.DuckDBPyRelation|None=None,
     **kwargs,
 ) -> duckdb.DuckDBPyRelation:
     """Converts a pyarrow table/dataset, pandas dataframe or polars dataframe
     into a duckdb relation
     """
-    # if ddb is None:
-    #    ddb = duckdb.connect()
+    if ddb is None:
+       ddb = duckdb.connect()
 
     if isinstance(table, pa.Table):
         if name is not None:
-            return duckdb.from_arrow(table).set_alias(name)
+            return ddb.from_arrow(table).set_alias(name)
         else:
-            return duckdb.from_arrow(table)
+            return ddb.from_arrow(table)
 
     elif isinstance(table, pa.dataset.Dataset):
         if name is not None:
-            return duckdb.from_arrow(table).set_alias(name)
+            return ddb.from_arrow(table).set_alias(name)
         else:
-            return duckdb.from_arrow(table)
+            return ddb.from_arrow(table)
 
     elif isinstance(table, pd.DataFrame):
         if name is not None:
-            return duckdb.from_df(table).set_alias(name)
+            return ddb.from_df(table).set_alias(name)
         else:
-            return duckdb.from_df(table)
+            return ddb.from_df(table)
 
     elif isinstance(table, pl.DataFrame):
         if name is not None:
-            return duckdb.from_arrow(table.to_arrow()).set_alias(name)
+            return ddb.from_arrow(table.to_arrow()).set_alias(name)
         else:
-            return duckdb.from_arrow(table.to_arrow())
+            return ddb.from_arrow(table.to_arrow())
 
     elif isinstance(table, str):
         if ".parquet" in table:
             table = (
-                duckdb.from_parquet(table, **kwargs).set_alias(name)
+                ddb.from_parquet(table, **kwargs).set_alias(name)
                 if name is not None
-                else duckdb.from_parquet(table, **kwargs)
+                else ddb.from_parquet(table, **kwargs)
             )
         elif ".csv" in table:
             if name is not None:
-                table = duckdb.from_csv_auto(table, **kwargs).set_alias(name)
+                table = ddb.from_csv_auto(table, **kwargs).set_alias(name)
             else:
-                table = duckdb.from_csv_auto(table, **kwargs)
+                table = ddb.from_csv_auto(table, **kwargs)
         elif name is not None:
-            table = duckdb.from_query(f"SELECT * FROM '{table}'").set_alias(name)
+            table = ddb.from_query(f"SELECT * FROM '{table}'").set_alias(name)
         else:
-            table = duckdb.from_query(f"SELECT * FROM '{table}'")
+            table = ddb.from_query(f"SELECT * FROM '{table}'")
 
         return table
 
-    elif isinstance(table, duckdb.DuckDBPyRelation):
+    elif isinstance(table, ddb.DuckDBPyRelation):
         return table
 
 
@@ -249,31 +258,146 @@ def sort_table(
     if ascending is None:
         ascending = True
 
-    descending = (
-        not ascending if isinstance(ascending, bool) else [not el for el in ascending]
-    )
-    if isinstance(table, pa.Table):
-        return to_polars(table=table).sort(by=sort_by, descending=descending).to_arrow()
+    if isinstance(sort_by, str):
+        sort_by = [sort_by]
+
+    if isinstance(table, pa.Table | pa.dataset.Dataset):
+        order = "ascending" if ascending else "descending"
+        return table.sort_by([(col, order) for col in sort_by])
 
     elif isinstance(table, pd.DataFrame):
-        return (
-            to_polars(table=table).sort(by=sort_by, descending=descending).to_pandas()
-        )
-
-    elif isinstance(table, pa.dataset.Dataset):
-        return pds.dataset(
-            to_polars(table=table)
-            .sort(by=sort_by, descending=descending)
-            .collect()
-            .to_arrow(),
-        )
+        return table.sort_values(by=sort_by, ascending=ascending).to_pandas()
 
     elif isinstance(table, pl.DataFrame):
+        descending = (
+            not ascending
+            if isinstance(ascending, bool)
+            else [not el for el in ascending]
+        )
         return table.sort(by=sort_by, descending=descending)
 
     elif isinstance(table, duckdb.DuckDBPyRelation):
         sort_by_sql = sort_as_sql(sort_by=sort_by, ascending=ascending)
         return table.order(sort_by_sql)
+
+
+def concat_tables(
+    tables: List[pa.Table]
+    | List[pl.DataFrame]
+    | List[pd.DataFrame]
+    | List[pa.dataset.Dataset]
+    | List[duckdb.DuckDBPyRelation],
+    schema: pa.Schema | dict | None = None,
+):
+    if (
+        isinstance(tables[0], pa.Table | pd.DataFrame | pl.DataFrame)
+        and schema is not None
+    ):
+        tables = [cast_schema(table) for table in tables]
+
+    if isinstance(tables[0], pds.Dataset):
+        return pds.Dataset(tables)
+
+    elif isinstance(tables[0], pa.Table):
+        return pa.concat_tables(tables, promote=True)
+
+    elif isinstance(tables[0], duckdb.DuckDBPyRelation):
+        table = tables[0]
+        for table_ in tables[1:]:
+            table = table.union(table_)
+
+        return table
+
+    elif isinstance(tables[0], pl.DataFrame()):
+        return pl.concat(tables, how="diagonal")
+
+    elif isinstance(tables[0], pd.DataFrame):
+        return pd.concat([tables])
+
+
+def reorder_columns(
+    table: pa.Table | pl.DataFrame | pd.DataFrame | duckdb.DuckDBPyRelation,
+    columns: list,
+):
+    if isinstance(table, pd.DataFrame):
+        return table[columns]
+    if isinstance(table, pa.Table | pl.DataFrame()):
+        return table.select(columns)
+    if isinstance(table, duckdb.DuckDBPyRelation):
+        return table.project(",".join(columns))
+
+    return table
+
+
+def cast_schema(
+    table: pa.Table | pd.DataFrame | pl.DataFrame, schema: pa.Schema | dict
+):
+    if isinstance(table, pa.Table):
+        if isinstance(schema, dict):
+            if isinstance(list(schema.value())[0], pl.datatyes.DataTypeClass):
+                schema = _convert_schema_polars_to_pyarrow(schema)
+            else:
+                schema = _convert_schema_pandas_to_pyarrow(schema)
+
+        if len(table.schema.names) < len(schema.names):
+            missing_names = list(set(table.schema.names) - set(schema.names))
+            for missing_name in missing_names:
+                table = table.add_column(
+                    schema.names.index(missing_name),
+                    missing_name,
+                    pa.array([None] * len(table)),
+                )
+        if schema == table.schema:
+            return table
+
+        return table.select(schema.names).cast(schema)
+
+    if isinstance(table, pd.DataFrame):
+        if isinstance(schema, pa.Schema):
+            schema = _convert_schema_pyarrow_to_pandas(schema)
+
+        if isinstance(list(schema.values)[0], pl.datatypes.DataTypeClass):
+            schema = _convert_schema_polars_to_pandas(schema)
+
+        if len(table.columns) < len(schema):
+            missing_names = list(set(table.columns) - set(schema.keys()))
+            for missing_name in missing_names:
+                table = table.insert(
+                    list(schema.keys().index(missing_name)), missing_name, None
+                )
+        if table.dtypes.to_dict == schema:
+            return table
+
+        return table.astype(schema)
+
+    if isinstance(table, pl.DataFrame):
+        if isinstance(schema, pa.Schema):
+            schema = _convert_schema_pyarrow_to_polars(schema)
+
+        if isinstance(list(schema.values)[0], pl.datatypes.DataTypeClass):
+            schema = _convert_schema_pandas_to_polars(schema)
+
+        if len(table.columns) < len(schema):
+            missing_names = list(set(table.columns) - set(schema.keys()))
+            for missing_name in missing_names:
+                table = table.insert_at_idx(
+                    list(schema.keys().index(missing_name)),
+                    missing_name,
+                    pl.Series([None] * len(table)),
+                )
+        if table.schema == schema:
+            return table
+
+        return table.with_columns(
+            [pl.col(col).cast(type_) for col, type_ in schema.items()]
+        )
+
+
+def unify_schema(
+    tables: List[pa.Table] | List[pl.DataFrame] | List[pd.DataFrame],
+    schema: pa.Schema | dict,
+):
+    return [cast_schema(table, schema) for table in tables]
 
 
 def get_table_delta(
@@ -289,7 +413,7 @@ def get_table_delta(
     | duckdb.DuckDBPyRelation
     | pa.dataset.Dataset
     | str,
-    # ddb: duckdb.DuckDBPyConnection,
+    ddb: duckdb.DuckDBPyConnection,
     subset: list | None = None,
     cast_as_str: bool = False,
 ) -> (
@@ -299,11 +423,11 @@ def get_table_delta(
     | duckdb.DuckDBPyRelation
     | pa.dataset.Dataset
 ):
-    # if not ddb:  # is None:
-    #    ddb = duckdb.connect()
+    if not ddb:  # is None:
+       ddb = duckdb.connect()
 
-    table1_ = to_relation(table1)
-    table2_ = to_relation(table2)
+    table1_ = to_relation(table1, ddb=ddb)
+    table2_ = to_relation(table2, ddb=ddb)
 
     if subset:
         if cast_as_str:
@@ -772,7 +896,7 @@ def read_table(
         )
 
     if partitioning is not None:
-        partitions = get_partitions(path, partitioning=partitioning)
+        partitions = get_partitions_from_path(path, partitioning=partitioning)
 
         for key, values in partitions:
             table = table.append_column(
