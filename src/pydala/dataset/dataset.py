@@ -27,6 +27,7 @@ from .utils.table import (
     sort_table,
     to_arrow,
     write_table,
+    get_timestamp_column
 )
 
 
@@ -82,12 +83,7 @@ class BaseDataset:
 
         self._timestamp_column = timestamp_column
         if not self._path_empty and self._timestamp_column is None:
-            timestamp_columns = [
-                col.name
-                for col in self._base_dataset.schema
-                if isinstance(col.type, pa.TimestampType)
-            ]
-            self._timestamp_column = timestamp_columns[0]
+            self._timestamp_column = get_timestamp_column(self._base_dataset)
 
         self._set_file_details()
 
@@ -826,7 +822,7 @@ class Dataset(BaseDataset):
         ascending: bool | List[bool] = True,
         distinct: bool = False,
         keep: str = "first",
-    ):
+    ):  # sourcery skip: low-code-quality
         if isinstance(table, list | tuple):
             if isinstance(table[0], pds.Dataset):
                 table = pds.Dataset(table)
@@ -848,19 +844,19 @@ class Dataset(BaseDataset):
 
         if mode == "delta" and self._has_arrow_dataset:
             if self._timestamp_column:
-                if not isinstance(table, duckdb.DuckDBPyRelation):
-                    min_timestamp, max_timestamp = (
+                min_timestamp, max_timestamp = (
+                    table.aggregate(
+                        f"min({self._timestamp_column}), max({self._timestamp_column})"
+                    ).fetchone()
+                    if isinstance(table, duckdb.DuckDBPyRelation)
+                    else (
                         self.ddb.from_arrow(table)
                         .aggregate(
                             f"min({self._timestamp_column}), max({self._timestamp_column})"
                         )
                         .fetchone()
                     )
-                else:
-                    min_timestamp, max_timestamp = table.aggregate(
-                        f"min({self._timestamp_column}), max({self._timestamp_column})"
-                    ).fetchone()
-
+                )
             table = (
                 get_table_delta(
                     table1=self.ddb.from_arrow(table),
@@ -887,12 +883,11 @@ class Dataset(BaseDataset):
         self._delta_table = table
 
         if len(table):
-            if not self._has_arrow_dataset:
-                self._arrow_dataset = pds.dataset(table)
-            else:
-                self._arrow_dataset = pds.dataset(
-                    [self._arrow_dataset, pds.dataset(table)]
-                )
+            self._arrow_dataset = (
+                pds.dataset([self._arrow_dataset, pds.dataset(table)])
+                if self._has_arrow_dataset
+                else pds.dataset(table)
+            )
             self.register(
                 f"{self.name}.arrow_dataset", self._arrow_dataset
             ) if self.name else self.register("arrow_dataset", self._arrow_dataset)

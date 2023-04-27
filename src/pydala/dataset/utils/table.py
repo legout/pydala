@@ -5,6 +5,7 @@ from time import strftime
 from typing import Dict, List, Tuple
 
 import duckdb
+from numpy import isin
 import pandas as pd
 import polars as pl
 import pyarrow as pa
@@ -19,7 +20,7 @@ from ...utils import sort_as_sql
 from .dataset import get_partitions
 
 
-def get_timedelta_str(timedelta: str, to: str = "polars"):
+def get_timedelta_str(timedelta: str, to: str = "polars") -> str:
     polars_timedelta_units = [
         "ns",
         "us",
@@ -65,13 +66,30 @@ def get_timedelta_str(timedelta: str, to: str = "polars"):
     return f"{val} " + re.sub("s$", "", unit)
 
 
+def get_timestamp_column(
+    table: pa.Table
+    | pd.DataFrame
+    | pl.DataFrame
+    | duckdb.DuckDBPyRelation
+    | pa.dataset.Dataset,
+) -> str:
+    if isinstance(table, duckdb.DuckDBPyRelation):
+        table = table.limit(10)
+
+    table = to_arrow(table)
+    
+    return [col.name for col in table.schema if isinstance(col.type, pa.TimestampType)][
+        0
+    ]
+
+
 def to_arrow(
     table: pa.Table
     | pd.DataFrame
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
     | pa.dataset.Dataset,
-) -> pl.DataFrame:
+) -> pa.Table | pd.dataset.Dataset:
     """Converts a polars dataframe, pandas dataframe or duckdb relation
     into a pyarrow table/dataset.
     """
@@ -217,7 +235,13 @@ def sort_table(
     | pa.dataset.Dataset,
     sort_by: str | List[str] | Tuple[str] | None,
     ascending: bool | List[bool] | Tuple[bool] | None,
-) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
+) -> (
+    pa.Table
+    | pd.DataFrame
+    | pl.DataFrame
+    | duckdb.DuckDBPyRelation
+    | pa.dataset.Dataset
+):
     "Sort a pyarrow table, pandas or polars dataframe or duckdb relation."
     if not sort_by:
         return table
@@ -268,7 +292,13 @@ def get_table_delta(
     # ddb: duckdb.DuckDBPyConnection,
     subset: list | None = None,
     cast_as_str: bool = False,
-) -> pa.Table | pd.DataFrame | pl.DataFrame | duckdb.DuckDBPyRelation:
+) -> (
+    pa.Table
+    | pd.DataFrame
+    | pl.DataFrame
+    | duckdb.DuckDBPyRelation
+    | pa.dataset.Dataset
+):
     # if not ddb:  # is None:
     #    ddb = duckdb.connect()
 

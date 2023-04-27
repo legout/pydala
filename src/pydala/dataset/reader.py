@@ -73,7 +73,7 @@ def cache_dataset(
         partitioning=dataset._partitioning,
         filesystem=fsspec_filesystem(protocol="file"),
         timestamp_column=dataset._timestamp_column,
-        name=dataset.name + "_cache_",
+        name=f"{dataset.name}_cache_",
         ddb=dataset.ddb,
     )
     sync_datasets(dataset1=dataset, dataset2=cache_dataset_, delete=True)
@@ -111,11 +111,7 @@ def dataset(
     cache_base_dir: str = "/tmp/pydala",
     **storage_options,
 ) -> Dataset:
-    if cached:
-        materialize_fs = False
-    else:
-        materialize_fs = materialize
-
+    materialize_fs = False if cached else materialize
     ds = filesystem_dataset(
         path=path,
         bucket=bucket,
