@@ -180,14 +180,14 @@ def to_relation(
     | str,
     # ddb: duckdb.DuckDBPyConnection | None = None,
     name: str | None = None,
-    ddb:duckdb.DuckDBPyRelation|None=None,
+    ddb: duckdb.DuckDBPyRelation | None = None,
     **kwargs,
 ) -> duckdb.DuckDBPyRelation:
     """Converts a pyarrow table/dataset, pandas dataframe or polars dataframe
     into a duckdb relation
     """
     if ddb is None:
-       ddb = duckdb.connect()
+        ddb = duckdb.connect()
 
     if isinstance(table, pa.Table):
         if name is not None:
@@ -424,7 +424,7 @@ def get_table_delta(
     | pa.dataset.Dataset
 ):
     if not ddb:  # is None:
-       ddb = duckdb.connect()
+        ddb = duckdb.connect()
 
     table1_ = to_relation(table1, ddb=ddb)
     table2_ = to_relation(table2, ddb=ddb)
@@ -588,17 +588,26 @@ def with_strftime_column(
     | pa.dataset.Dataset,
     timestamp_column: str,
     strftime: str | List[str],
+    column_names: str | List[str] | None = None,
 ):
     if isinstance(strftime, str):
         strftime = [strftime]
+    if isinstance(column_names, str):
+        column_names = [column_names]
+
+    if column_names is None:
+        column_names = [
+            f"_strftime_{strftime_.replace('%', '').replace('-', '_')}_"
+            for strftime_ in strftime
+        ]
 
     if isinstance(table, duckdb.DuckDBPyRelation):
         return table.project(
             ",".join(
                 table.columns
                 + [
-                    f"strftime({timestamp_column}, '{strftime_}') as _strftime_{strftime_.replace('%', '').replace('-','_')}_"
-                    for strftime_ in strftime
+                    f"strftime({timestamp_column}, '{strftime_}') as {column_name}_"
+                    for strftime_, column_name in zip(strftime, column_names)
                 ]
             )
         )
@@ -607,10 +616,8 @@ def with_strftime_column(
 
     table_ = table_.with_columns(
         [
-            pl.col(timestamp_column)
-            .dt.strftime(strftime_)
-            .alias(f"_strftime_{strftime_.replace('%', '').replace('-','_')}_")
-            for strftime_ in strftime
+            pl.col(timestamp_column).dt.strftime(strftime_).alias(column_name)
+            for strftime_, column_name in zip(strftime, column_names)
         ]
     )
     if isinstance(table, pa.Table | pa._dataset.Dataset):
@@ -629,9 +636,18 @@ def with_timebucket_column(
     | pa._dataset.Dataset,
     timestamp_column: str,
     timedelta: str | List[str],
+    column_names: str | List[str] | None = None,
 ):
     if isinstance(timedelta, str):
         timedelta = [timedelta]
+
+    if isinstance(column_names, str):
+        column_names = [column_names]
+
+    if column_names is None:
+        column_names = [
+            f"_timebucket_{timedelta_.replace(' ', '_')}_" for timedelta_ in timedelta
+        ]
 
     if isinstance(table, duckdb.DuckDBPyRelation):
         timedelta = [
@@ -641,8 +657,8 @@ def with_timebucket_column(
             ",".join(
                 table.columns
                 + [
-                    f"time_bucket(INTERVAL '{timedelta_}', {timestamp_column}) as _timebucket_{timedelta_.replace(' ', '_')}_"
-                    for timedelta_ in timedelta
+                    f"time_bucket(INTERVAL '{timedelta_}', {timestamp_column}) as {column_name}"
+                    for timedelta_, column_name in zip(timedelta, column_names)
                 ]
             )
         )
@@ -651,10 +667,8 @@ def with_timebucket_column(
     timedelta = [get_timedelta_str(timedelta_, to="polars") for timedelta_ in timedelta]
     table_ = table_.with_columns(
         [
-            pl.col(timestamp_column)
-            .dt.truncate(timedelta_)
-            .alias(f"_timebucket_{timedelta_.replace(' ', '_')}_")
-            for timedelta_ in timedelta
+            pl.col(timestamp_column).dt.truncate(timedelta_).alias(column_name)
+            for timedelta_, column_name in zip(timedelta, column_names)
         ]
     )
     if isinstance(table, pa.Table | pa._dataset.Dataset):

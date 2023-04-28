@@ -695,8 +695,9 @@ class Dataset(BaseDataset):
             )
         )
 
-    def partition_by(
+    def _partition_by(
         self,
+        which: str = "ddb_rel",
         columns: str | List[str] | None = None,
         strftime: str | List[str] | None = None,
         timedelta: str | List[str] | None = None,
@@ -709,16 +710,8 @@ class Dataset(BaseDataset):
         subset: str | List[str] | None = None,
         keep: str = "first",
         presort: bool = False,
-        as_: str | None = None,  # options are "polars", "arrow", "duckdb", "pandas"
     ):
-        if as_ == "arrow":
-            table_ = self.arrow_table
-        elif as_ == "pandas":
-            table_ = self.df
-        elif as_ == "polars":
-            table_ = self.pl
-        else:
-            table_ = self.ddb_rel
+        table_ = eval("self." + which)
 
         return partition_by(
             table_,
@@ -739,6 +732,7 @@ class Dataset(BaseDataset):
 
     def iter_batches(
         self,
+        which: str = "ddb_rel",
         batch_size: int | None = 1_000_000,
         file_size: str | None = None,
         partition_by_strftime: str | List[str] | None = None,
@@ -750,13 +744,13 @@ class Dataset(BaseDataset):
         subset: str | List[str] | None = None,
         keep: str = "first",
         presort: bool = False,
-        as_: str | None = None,
         as_dict: bool = False,
     ):
         if file_size:
             batch_size = self._estimate_batch_size(file_size=file_size)
 
-        yield from self.partition_by(
+        yield from self._partition_by(
+            which=which,
             strftime=partition_by_strftime,
             timedelta=partition_by_timedelta,
             n_rows=batch_size,
@@ -768,11 +762,11 @@ class Dataset(BaseDataset):
             subset=subset,
             keep=keep,
             presort=presort,
-            as_=as_,
         )
 
     def to_batches(
         self,
+        which: str = "ddb_rel",
         batch_size: int | None = 1_000_000,
         file_size: str | None = None,
         partition_by_strftime: str | List[str] | None = None,
@@ -788,6 +782,7 @@ class Dataset(BaseDataset):
         as_dict: bool = False,
     ):
         batches = self.iter_batches(
+            which=which,
             batch_size=batch_size,
             file_size=file_size,
             partition_by_strftime=partition_by_strftime,
