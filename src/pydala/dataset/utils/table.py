@@ -97,7 +97,7 @@ def to_arrow(
     | pl.DataFrame
     | duckdb.DuckDBPyRelation
     | pa.dataset.Dataset,
-) -> pa.Table | pd.dataset.Dataset:
+) -> pa.Table | pa.dataset.Dataset:
     """Converts a polars dataframe, pandas dataframe or duckdb relation
     into a pyarrow table/dataset.
     """
@@ -180,7 +180,7 @@ def to_relation(
     | str,
     # ddb: duckdb.DuckDBPyConnection | None = None,
     name: str | None = None,
-    ddb: duckdb.DuckDBPyRelation | None = None,
+    ddb: duckdb.DuckDBPyConnection | None = None,
     **kwargs,
 ) -> duckdb.DuckDBPyRelation:
     """Converts a pyarrow table/dataset, pandas dataframe or polars dataframe
@@ -232,7 +232,12 @@ def to_relation(
 
         return table
 
-    elif isinstance(table, ddb.DuckDBPyRelation):
+    elif isinstance(table, duckdb.DuckDBPyRelation):
+        #table_ = table
+        #if name is not None:
+        #    return ddb.from_query("SELECT * FROM table_").set_alias(name)
+        #else:
+        #    return ddb.from_query("SELECT * FROM table_")
         return table
 
 
@@ -365,11 +370,7 @@ def cast_schema(
                 table = table.insert(
                     list(schema.keys().index(missing_name)), missing_name, None
                 )
-        if table.dtypes.to_dict == schema:
-            return table
-
-        return table.astype(schema)
-
+        return table if table.dtypes.to_dict == schema else table.astype(schema)
     if isinstance(table, pl.DataFrame):
         if isinstance(schema, pa.Schema):
             schema = _convert_schema_pyarrow_to_polars(schema)
@@ -606,7 +607,7 @@ def with_strftime_column(
             ",".join(
                 table.columns
                 + [
-                    f"strftime({timestamp_column}, '{strftime_}') as {column_name}_"
+                    f"strftime({timestamp_column}, '{strftime_}') as {column_name}"
                     for strftime_, column_name in zip(strftime, column_names)
                 ]
             )
@@ -786,12 +787,6 @@ def partition_by(
         columns.append("row_nr")
         drop_columns_.append("row_nr")
 
-    if distinct:
-        table_ = distinct_table(table=table_, subset=subset, keep=keep)
-
-    if presort:
-        table_ = sort_table(table=table_, sort_by=sort_by, ascending=ascending)
-
     if not isinstance(table, duckdb.DuckDBPyRelation):
         table_ = to_polars(table_)
         if n_rows:
@@ -836,7 +831,9 @@ def partition_by(
 
     else:
         if n_rows:
-            table_ = table_.project(f"* exclude(row_nr), row_nr // {n_rows} as row_nr")
+            table_ = table_.project(
+                f"* exclude(row_nr), cast(floor(row_nr / {n_rows}) as int) as row_nr"
+            )
 
         partitions = duckdb.from_arrow(
             table_.project(", ".join(columns))
@@ -927,7 +924,7 @@ def write_table(
     format: str | None = None,
     filesystem: AbstractFileSystem | None = None,
     **kwargs,
-):
+):  # sourcery skip: avoid-builtin-shadow
     if filesystem is None:
         filesystem = fsspec_filesystem("file")
 

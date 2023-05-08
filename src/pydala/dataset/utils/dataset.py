@@ -32,7 +32,7 @@ def get_unified_schema(
 
         schemas_equal *= schemas_equal_
 
-    return unified_schema, schemas_equal_
+    return unified_schema, schemas_equal
 
 
 def get_file_details(

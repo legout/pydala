@@ -4,7 +4,7 @@ from fsspec import filesystem as fsspec_filesystem
 from .sync import sync_datasets
 import pyarrow as pa
 from fsspec.spec import AbstractFileSystem
-from typing import List, Dict
+from typing import List, Dict, Union
 import pyarrow.dataset as pds
 import datetime as dt
 
@@ -21,16 +21,20 @@ def filesystem_dataset(
     name: str | None = None,
     time_range: dt.datetime
     | str
-    | List[str, None]
-    | List[dt.datetime, None]
+    | List[Union[str, None]]
+    | List[Union[dt.datetime, None]]
     | None = None,
-    file_size: int | str | List[int, None] | List[str, None] | None = None,
+    file_size: int
+    | str
+    | List[Union[int, None]]
+    | List[Union[str, None]]
+    | None = None,
     last_modified: dt.datetime
     | str
-    | List[str, None]
-    | List[dt.datetime, None]
+    | List[Union[str, None]]
+    | List[Union[dt.datetime, None]]
     | None = None,
-    row_count: int | List[int, None] | None = None,
+    row_count: int | List[Union[int, None]] | None = None,
     materialize: bool = False,
     combine_chunks: bool = False,
     chunk_size: int = 1_000_000,
@@ -46,7 +50,7 @@ def filesystem_dataset(
         timestamp_column=timestamp_column,
         ddb=ddb,
         name=name,
-        *storage_options,
+        **storage_options,
     )
 
     ds._load_arrow_dataset(
@@ -94,16 +98,20 @@ def dataset(
     name: str | None = None,
     time_range: dt.datetime
     | str
-    | List[str, None]
-    | List[dt.datetime, None]
+    | List[Union[str, None]]
+    | List[Union[dt.datetime, None]]
     | None = None,
-    file_size: int | str | List[int, None] | List[str, None] | None = None,
+    file_size: int
+    | str
+    | List[Union[int, None]]
+    | List[Union[str, None]]
+    | None = None,
     last_modified: dt.datetime
     | str
-    | List[str, None]
-    | List[dt.datetime, None]
+    | List[Union[str, None]]
+    | List[Union[dt.datetime, None]]
     | None = None,
-    row_count: int | List[int, None] | None = None,
+    row_count: int | List[Union[int, None]] | None = None,
     materialize: bool = False,
     combine_chunks: bool = False,
     chunk_size: int = 1_000_000,

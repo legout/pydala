@@ -49,7 +49,7 @@ class BaseDataset:
         self._protocol = storage_options.pop("protocol", None) or so["protocol"]
         bucket = bucket or ""
         self._path = so["path"].replace(bucket, "")
-        self._bucket = (bucket,)
+        self._bucket = bucket
         self._full_path = os.path.join(self._bucket, self._path)
         self._uri = (
             os.path.join(f"{self._protocol}://", self._full_path)
@@ -60,7 +60,7 @@ class BaseDataset:
         self._format = re.sub("\.", "", format)
         self._partitioning = partitioning
         self.ddb = (
-            ddb if isinstance(ddb, duckdb.DuckDBPyConnection) else duckdb.connect()
+            ddb.cursor() if isinstance(ddb, duckdb.DuckDBPyConnection) else duckdb.connect()
         )
         self.name = name
         if name is not None:
@@ -153,16 +153,16 @@ class BaseDataset:
         self,
         time_range: dt.datetime
         | str
-        | List[str, None]
-        | List[dt.datetime, None]
+        | List[Union[str,None]]
+        | List[Union[dt.datetime, None]]
         | None = None,
-        file_size: int | str | List[int, None] | List[str, None] | None = None,
+        file_size: int | str | List[Union[int, None]] | List[Union[str, None]] | None = None,
         last_modified: dt.datetime
         | str
-        | List[str, None]
-        | List[dt.datetime, None]
+        | List[Union[str,None]]
+        | List[Union[dt.datetime, None]]
         | None = None,
-        row_count: int | List[int, None] | None = None,
+        row_count: int |  List[Union[int, None]]| None = None,
     ):
         self._check_path_exists()
 
@@ -262,16 +262,16 @@ class BaseDataset:
         self,
         time_range: dt.datetime
         | str
-        | List[str, None]
-        | List[dt.datetime, None]
+        | List[Union[str,None]]
+        | List[Union[dt.datetime, None]]
         | None = None,
-        file_size: int | str | List[int, None] | List[str, None] | None = None,
+        file_size: int | str | List[Union[int, None]] | List[Union[str, None]] | None = None,
         last_modified: dt.datetime
         | str
-        | List[str, None]
-        | List[dt.datetime, None]
+        | List[Union[str,None]]
+        | List[Union[dt.datetime, None]]
         | None = None,
-        row_count: int | List[int, None] | None = None,
+        row_count: int |  List[Union[int, None]]| None = None,
         **kwargs,
     ):
         self._check_path_exists()
@@ -308,7 +308,7 @@ class BaseDataset:
     def arrow_schemas(self):
         if self._base_dataset is None:
             self._set_base_dataset()
-            if self._base_dataset:
+            if not self._base_dataset:
                 return None
         if not hasattr(self, "_arrow_schemas"):
             self._arrow_schemas = get_arrow_schema(self._base_dataset)
@@ -319,7 +319,7 @@ class BaseDataset:
     def pl_schemas(self):
         if self._base_dataset is None:
             self._set_base_dataset()
-            if self._base_dataset:
+            if not self._base_dataset:
                 return None
         if not hasattr(self, "_pl_schemas"):
             self._pl_schemas = {
@@ -333,10 +333,8 @@ class BaseDataset:
 
     @property
     def arrow_schema(self):
-        if self._base_dataset is None:
-            self._set_base_dataset()
-            if self._base_dataset:
-                return None
+        if self.arrow_schemas is None:
+            return None
         if not hasattr(self, "_arrow_schema"):
             self._arrow_schema, self._schemas_equal = get_unified_schema(
                 self.arrow_schemas
@@ -346,10 +344,8 @@ class BaseDataset:
 
     @property
     def pl_schema(self):
-        if self._base_dataset is None:
-            self._set_base_dataset()
-            if self._base_dataset:
-                return None
+        if self.arrow_schema is None:
+            return None
         if not hasattr(self, "_pl_schema"):
             self._pl_schema = convert_schema(self.arrow_schema)
         return self._pl_schema
@@ -360,7 +356,7 @@ class BaseDataset:
 
     @property
     def schemas_equal(self):
-        if self._base_dataset is None:
+        if self.arrow_schemas is None:
             return None
         if not hasattr(self, "_schemas_equal"):
             self._arrow_schema, self._schemas_equal = get_unified_schema(
@@ -370,10 +366,8 @@ class BaseDataset:
 
     @property
     def arrow_schema_sorted(self):
-        if self._base_dataset is None:
-            self._set_base_dataset()
-            if self._base_dataset:
-                return None
+        if self.arrow_schema is None:
+            return None
         if not hasattr(self, "_arrow_schema_sorted"):
             self._arrow_schema_sorted = sort_schema(self.arrow_schema)
         return self._arrow_schema_sorted
@@ -382,7 +376,7 @@ class BaseDataset:
     def pl_schema_sorted(self):
         if self._base_dataset is None:
             self._set_base_dataset()
-            if self._base_dataset:
+            if not self._base_dataset:
                 return None
         if not hasattr(self, "_pl_schema_sorted"):
             self._pl_schema_sorted = sort_schema(self.pl_schema)
@@ -465,7 +459,7 @@ class Dataset(BaseDataset):
             if combine_chunks:
                 self._arrow_table = self._arrow_table.combine_chunks()
             elif chunk_size:
-                self._arrow_table = pa.table.from_batches(
+                self._arrow_table = pa.Table.from_batches(
                     self._arrow_table.to_batches(max_chunksize=chunk_size)
                 )
 
