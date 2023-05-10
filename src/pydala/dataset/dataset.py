@@ -16,19 +16,21 @@ from fsspec.spec import AbstractFileSystem
 from fsspec.utils import infer_storage_options
 from zmq import has
 
-from ..utils import humanize_size, run_parallel, humanized_size_to_bytes
+from ..utils import humanize_size, humanized_size_to_bytes, run_parallel
 from .utils.dataset import get_arrow_schema, get_file_details, get_unified_schema
 from .utils.schema import convert_schema, sort_schema
 from .utils.table import (
     distinct_table,
     get_table_delta,
+    get_timestamp_column,
     partition_by,
     read_table,
     sort_table,
     to_arrow,
+    with_strftime_column,
     write_table,
-    get_timestamp_column,
-    with_strftime_column
+    add_date_columns,
+    get_column_names
 )
 
 
@@ -61,7 +63,9 @@ class BaseDataset:
         self._format = re.sub("\.", "", format)
         self._partitioning = partitioning
         self.ddb = (
-            ddb.cursor() if isinstance(ddb, duckdb.DuckDBPyConnection) else duckdb.connect()
+            ddb.cursor()
+            if isinstance(ddb, duckdb.DuckDBPyConnection)
+            else duckdb.connect()
         )
         self.name = name
         if name is not None:
@@ -154,16 +158,20 @@ class BaseDataset:
         self,
         time_range: dt.datetime
         | str
-        | List[Union[str,None]]
+        | List[Union[str, None]]
         | List[Union[dt.datetime, None]]
         | None = None,
-        file_size: int | str | List[Union[int, None]] | List[Union[str, None]] | None = None,
+        file_size: int
+        | str
+        | List[Union[int, None]]
+        | List[Union[str, None]]
+        | None = None,
         last_modified: dt.datetime
         | str
-        | List[Union[str,None]]
+        | List[Union[str, None]]
         | List[Union[dt.datetime, None]]
         | None = None,
-        row_count: int |  List[Union[int, None]]| None = None,
+        row_count: int | List[Union[int, None]] | None = None,
     ):
         self._check_path_exists()
 
@@ -263,16 +271,20 @@ class BaseDataset:
         self,
         time_range: dt.datetime
         | str
-        | List[Union[str,None]]
+        | List[Union[str, None]]
         | List[Union[dt.datetime, None]]
         | None = None,
-        file_size: int | str | List[Union[int, None]] | List[Union[str, None]] | None = None,
+        file_size: int
+        | str
+        | List[Union[int, None]]
+        | List[Union[str, None]]
+        | None = None,
         last_modified: dt.datetime
         | str
-        | List[Union[str,None]]
+        | List[Union[str, None]]
         | List[Union[dt.datetime, None]]
         | None = None,
-        row_count: int |  List[Union[int, None]]| None = None,
+        row_count: int | List[Union[int, None]] | None = None,
         **kwargs,
     ):
         self._check_path_exists()
@@ -498,7 +510,10 @@ class Dataset(BaseDataset):
             if tables is not None:
                 tables = tables.pl()["name"].to_list()
                 for table in tables:
-                    self.sql(f"DROP TABLE {table}")
+                    if "arrow" in table:
+                        self.sql(f"DROP VIEW {table}")
+                    else:
+                        self.sql(f"DROP TABLE {table}")
 
     def reload(self, *args, **kwargs):
         was_materialized = self.is_materialized
@@ -543,10 +558,10 @@ class Dataset(BaseDataset):
             )
             self._del(ddb_rel=True)
 
-        if self.has_ddb_table:
-            self.ddb.sql()
+        # if self.has_ddb_table:
+        #    self.ddb.sql()
 
-        self._del(pl=True, df=True)
+        self._del(pl=True, df=True, ddb_table=True)
 
     def distinct(self, subset: str | List[str] | None = None, keep: str = "first"):
         if not hasattr(self, "_arrow_table"):
@@ -690,6 +705,42 @@ class Dataset(BaseDataset):
             )
         )
 
+    def add_date_columns(
+        self,
+        year: bool = False,
+        month: bool = False,
+        week: bool = False,
+        yearday: bool = False,
+        monthday: bool = False,
+        weekday: bool = False,
+        strftime: str | None = None,
+    ):
+        if not self.is_materialized:
+            self._ddb_rel = add_date_columns(
+                table=self.ddb_rel,
+                year=year,
+                month=month,
+                week=week,
+                yearday=yearday,
+                monthday=monthday,
+                weekday=weekday,
+                strftime=strftime,
+            )
+        else:
+            self._arrow_table = add_date_columns(
+                table=self._arrow_table,
+                year=year,
+                month=month,
+                week=week,
+                yearday=yearday,
+                monthday=monthday,
+                weekday=weekday,
+                strftime=strftime,
+            )
+            self._del(ddb_rel=True)
+
+        self._del(pl=True, df=True, ddb_table=True)
+
     def _partition_by(
         self,
         which: str = "ddb_rel",
@@ -706,7 +757,9 @@ class Dataset(BaseDataset):
         keep: str = "first",
         presort: bool = False,
     ):
-        table_ = eval("self." + which)
+        
+
+        table_ = eval(f"self.{which}")
 
         return partition_by(
             table_,
@@ -724,58 +777,13 @@ class Dataset(BaseDataset):
             keep=keep,
             presort=presort,
         )
-    def add_date_columns(
-        self,
-        year: bool = False,
-        month: bool = False,
-        week: bool = False,
-        yearday: bool = False,
-        monthday: bool = False,
-        weekday: bool = False,
-        strftime: str | None = None,
-    ):
-        if strftime:
-            if isinstance(strftime, str):
-                strftime = [strftime]
-            column_names = [
-                f"_strftime_{strftime_.replace('%', '').replace('-', '_')}_"
-                for strftime_ in strftime
-            ]
-        else:
-            strftime = []
-            column_names = []
 
-        if year:
-            strftime.append("%Y")
-            column_names.append("year")
-        if month:
-            strftime.append("%m")
-            column_names.append("month")
-        if week:
-            strftime.append("%W")
-            column_names.append("week")
-        if yearday:
-            strftime.append("%j")
-            column_names.append("year_day")
-        if monthday:
-            strftime.append("%d")
-            column_names.append("month_day")
-        if weekday:
-            strftime.append("%a")
-            column_names.append("week_day")
-
-        self._table = with_strftime_column(
-            table=self._table,
-            timestamp_column=self._timestamp_column,
-            strftime=strftime,
-            column_names=column_names,
-        )
-        
     def iter_batches(
         self,
         which: str = "ddb_rel",
         batch_size: int | None = 1_000_000,
         file_size: str | None = None,
+        columns: str | List[str] | None = None,
         partition_by_strftime: str | List[str] | None = None,
         partition_by_timedelta: str | List[str] | None = None,
         drop: bool = False,
@@ -792,6 +800,7 @@ class Dataset(BaseDataset):
 
         yield from self._partition_by(
             which=which,
+            columns=columns,
             strftime=partition_by_strftime,
             timedelta=partition_by_timedelta,
             n_rows=batch_size,
@@ -810,6 +819,7 @@ class Dataset(BaseDataset):
         which: str = "ddb_rel",
         batch_size: int | None = 1_000_000,
         file_size: str | None = None,
+        columns: str | List[str] | None = None,
         partition_by_strftime: str | List[str] | None = None,
         partition_by_timedelta: str | List[str] | None = None,
         drop: bool = False,
@@ -826,6 +836,7 @@ class Dataset(BaseDataset):
             which=which,
             batch_size=batch_size,
             file_size=file_size,
+            columns=columns,
             partition_by_strftime=partition_by_strftime,
             partition_by_timedelta=partition_by_timedelta,
             sort_by=sort_by,

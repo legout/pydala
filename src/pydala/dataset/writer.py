@@ -21,8 +21,8 @@ from .utils.table import (
     get_timestamp_column,
     get_timestamp_min_max,
     sort_table,
+    to_arrow,
     to_relation,
-    with_strftime_column,
     write_table,
 )
 
@@ -67,8 +67,9 @@ class Writer(Dataset):
 
         if isinstance(table, list | tuple):
             table = concat_tables(tables=table, schema=schema)
+            
 
-        self._table = table
+        self._table = table #to_relation(table, ddb=self.ddb)
         self._mode = mode
 
         self._min_timestamp = None
@@ -116,13 +117,13 @@ class Writer(Dataset):
             f"data-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d%H%M%S')}-{random_id()}.{self._format}",
         )
 
-    def _gen_table_delta(
+    def _get_table_delta(
         self, subset: str | List[str] | None = None
     ) -> duckdb.DuckDBPyRelation:
         if not self._path_empty:
             if self._timestamp_column:
                 self._table = get_table_delta(
-                    table1=to_relation(self._table, ddb=self.ddb),
+                    table1=self._table,
                     table2=self.ddb_rel.filter(
                         f"{self._timestamp_column}>='{self._min_timestamp}' AND {self._timestamp_column}<='{self._max_timestamp}'"
                     ),
@@ -148,36 +149,21 @@ class Writer(Dataset):
         distinct: bool = False,
         subset: str | None = None,
         keep: str = "first",
+        presort:bool=False, 
         preload: bool = False,
-        iter_from: str = "ddb_rel",
+        #iter_from: str = "ddb_rel",
     ):
         partitioning = partitioning or self._partitioning
 
-        if self._timestamp_column is not None:
-            date_columns_to_add = {
-                col: col in [part.lower() for part in partitioning]
-                for col in [
-                    "year",
-                    "month",
-                    "week",
-                    "yearday",
-                    "monthday",
-                    "weekday",
-                    "strftime",
-                ]
-                if col not in [table_col.lower() for table_col in self._table.columns]
-            }
-            if len(date_columns_to_add):
-                self.add_date_columns(**date_columns_to_add)
 
         if file_size:
             batch_size = self._estimate_batch_size(file_size=file_size)
 
-        if iter_from == "arrow":
-            self._table = self._table.arrow()
+        # if iter_from == "arrow":
+        #     self._table = self._table.arrow()
 
-        elif iter_from == "polars":
-            self._table = self._table.pl()
+        # elif iter_from == "polars":
+        #     self._table = self._table.pl()
 
         if partitioning:
             batches = self._partition_by(
@@ -190,13 +176,13 @@ class Writer(Dataset):
                 ascending=ascending,
                 distinct=distinct,
                 subset=subset,
-                presort=False,
+                presort=presort,
                 keep=keep,
             )
         if preload:
             batches = list(batches)
 
-        return batches
+        yield from batches
 
     def write(
         self,
@@ -204,6 +190,7 @@ class Writer(Dataset):
         file_size: str | None = None,
         partitioning: str | List[str] | None = None,
         partition_flavor: str = "dir",  # "hive" or "dir"
+        row_group_size:int=150_000,
         mode: str | None = None,
         format: str | None = None,
         schema: pa.Schema | None = None,
@@ -214,7 +201,6 @@ class Writer(Dataset):
         keep: str = "first",
         presort: bool = False,
         preload_partitions: bool = False,
-        iter_from: str = "ddb_rel",
     ):  # sourcery skip: avoid-builtin-shadow
         mode = mode or self._mode
         format = format or self._format
@@ -224,10 +210,7 @@ class Writer(Dataset):
         if mode == "delta":
             self._gen_table_delta(subset=subset)
 
-        if presort:
-            self.sort(by=sort_by, ascending=ascending)
-            if distinct:
-                self.distinct()
+        
 
         partitions = self.iter_partitions(
             batch_size=batch_size,
@@ -238,8 +221,8 @@ class Writer(Dataset):
             distinct=distinct,
             subset=subset,
             keep=keep,
+            presort=presort,
             preload=preload_partitions,
-            iter_from=iter_from,
         )
 
         def _write(names, table):
@@ -255,15 +238,16 @@ class Writer(Dataset):
                 format=format,
                 filesystem=self._dir_filesystem,
                 schema=schema,
+                row_group_size=row_group_size
             )
 
-        _ = Parallel(n_jobs=-1, backend="threading")(
-            delayed(_write)(partition[0], partition[1].arrow())
-            for partition in tqdm.tqdm(partitions)
-        )
-        # for partition in partitions:
-        #     _write(partition)
-
+        # _ = Parallel(n_jobs=-1, backend="threading")(
+        #     delayed(_write)(partition[0], to_arrow(partition[1]))
+        #     for partition in tqdm.tqdm(partitions)
+        # )
+        for partition in tqdm.tqdm(partitions):
+            partition[0], to_arrow(partition[1])
+            
         if mode == "overwrite":
             self._dir_filesystem.rm(self.file_details["path"].to_list())
 
@@ -319,22 +303,6 @@ def write_dataset(
     if isinstance(writer._partitioning, str):
         writer._partitioning = [writer._partitioning]
 
-    # if writer._timestamp_column is not None:
-    #     date_columns_to_add = {
-    #         col: col in [part.lower() for part in writer._partitioning]
-    #         for col in [
-    #             "year",
-    #             "month",
-    #             "week",
-    #             "yearday",
-    #             "monthday",
-    #             "weekday",
-    #             "strftime",
-    #         ]
-    #         if col not in [table_col.lower() for table_col in writer._table.columns]
-    #     }
-    #     if len(date_columns_to_add):
-    #         writer.add_date_columns(**date_columns_to_add)
 
     writer.write(
         batch_size=batch_size,
