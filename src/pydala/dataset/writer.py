@@ -208,7 +208,7 @@ class Writer(Dataset):
         partitioning = partitioning or self._partitioning
 
         if mode == "delta":
-            self._gen_table_delta(subset=subset)
+            self._get_table_delta(subset=subset)
 
         
 
@@ -241,12 +241,12 @@ class Writer(Dataset):
                 row_group_size=row_group_size
             )
 
-        # _ = Parallel(n_jobs=-1, backend="threading")(
-        #     delayed(_write)(partition[0], to_arrow(partition[1]))
-        #     for partition in tqdm.tqdm(partitions)
-        # )
-        for partition in tqdm.tqdm(partitions):
-            partition[0], to_arrow(partition[1])
+        _ = Parallel(n_jobs=-1, backend="threading")(
+            delayed(_write)(partition[0], to_arrow(partition[1]))
+            for partition in tqdm.tqdm(partitions)
+        )
+        # for partition in tqdm.tqdm(partitions):
+        #     partition[0], to_arrow(partition[1])
             
         if mode == "overwrite":
             self._dir_filesystem.rm(self.file_details["path"].to_list())
