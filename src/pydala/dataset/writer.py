@@ -19,6 +19,7 @@ from .utils.table import (
     distinct_table,
     get_table_delta,
     get_timestamp_column,
+    get_timestamp_min_max,
     sort_table,
     to_relation,
     with_strftime_column,
@@ -67,22 +68,22 @@ class Writer(Dataset):
         if isinstance(table, list | tuple):
             table = concat_tables(tables=table, schema=schema)
 
-        self._table = to_relation(table, ddb=self.ddb)
+        self._table = table
         self._mode = mode
 
         self._min_timestamp = None
         self._max_timestamp = None
 
         if self._base_dataset and self._timestamp_column is not None:
-            self._min_timestamp, self._max_timestamp = self._table.aggregate(
-                f"min({self._timestamp_column}), max({self._timestamp_column})"
-            ).fetchone()
+            self._min_timestamp, self._max_timestamp = get_timestamp_min_max(
+                table, timestamp_column=self._timestamp_column
+            )
             self.select_files(time_range=[self._min_timestamp, self._max_timestamp])
         else:
             self._timestamp_column = get_timestamp_column(table=self._table)
 
         self._load_arrow_dataset(time_range=[self._min_timestamp, self._max_timestamp])
-        self.register(f"{self.name}_table" if self.name else "_table", self._table)
+        #self.register(f"{self.name}_table" if self.name else "_table", self._table)
 
     def sort(self, by: str | List[str], ascending: bool = True):
         self._table = sort_table(self._table, sort_by=by, ascending=ascending)
@@ -121,7 +122,7 @@ class Writer(Dataset):
         if not self._path_empty:
             if self._timestamp_column:
                 self._table = get_table_delta(
-                    table1=self._table,
+                    table1=to_relation(self._table, ddb=self.ddb),
                     table2=self.ddb_rel.filter(
                         f"{self._timestamp_column}>='{self._min_timestamp}' AND {self._timestamp_column}<='{self._max_timestamp}'"
                     ),
@@ -137,53 +138,6 @@ class Writer(Dataset):
                     ddb=self.ddb,
                 )
 
-    def add_date_columns(
-        self,
-        year: bool = False,
-        month: bool = False,
-        week: bool = False,
-        yearday: bool = False,
-        monthday: bool = False,
-        weekday: bool = False,
-        strftime: str | None = None,
-    ):
-        if strftime:
-            if isinstance(strftime, str):
-                strftime = [strftime]
-            column_names = [
-                f"_strftime_{strftime_.replace('%', '').replace('-', '_')}_"
-                for strftime_ in strftime
-            ]
-        else:
-            strftime = []
-            column_names = []
-
-        if year:
-            strftime.append("%Y")
-            column_names.append("year")
-        if month:
-            strftime.append("%m")
-            column_names.append("month")
-        if week:
-            strftime.append("%W")
-            column_names.append("week")
-        if yearday:
-            strftime.append("%j")
-            column_names.append("year_day")
-        if monthday:
-            strftime.append("%d")
-            column_names.append("month_day")
-        if weekday:
-            strftime.append("%a")
-            column_names.append("week_day")
-
-        self._table = with_strftime_column(
-            table=self._table,
-            timestamp_column=self._timestamp_column,
-            strftime=strftime,
-            column_names=column_names,
-        )
-
     def iter_partitions(
         self,
         batch_size: int = 1_000_000,
@@ -195,9 +149,8 @@ class Writer(Dataset):
         subset: str | None = None,
         keep: str = "first",
         preload: bool = False,
-        iter_from:str="ddb_rel"
+        iter_from: str = "ddb_rel",
     ):
-        
         partitioning = partitioning or self._partitioning
 
         if self._timestamp_column is not None:
@@ -261,7 +214,7 @@ class Writer(Dataset):
         keep: str = "first",
         presort: bool = False,
         preload_partitions: bool = False,
-        iter_from:str="ddb_rel"
+        iter_from: str = "ddb_rel",
     ):  # sourcery skip: avoid-builtin-shadow
         mode = mode or self._mode
         format = format or self._format
@@ -286,7 +239,7 @@ class Writer(Dataset):
             subset=subset,
             keep=keep,
             preload=preload_partitions,
-            iter_from=iter_from
+            iter_from=iter_from,
         )
 
         def _write(names, table):

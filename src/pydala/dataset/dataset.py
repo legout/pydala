@@ -28,6 +28,7 @@ from .utils.table import (
     to_arrow,
     write_table,
     get_timestamp_column,
+    with_strftime_column
 )
 
 
@@ -723,7 +724,53 @@ class Dataset(BaseDataset):
             keep=keep,
             presort=presort,
         )
+    def add_date_columns(
+        self,
+        year: bool = False,
+        month: bool = False,
+        week: bool = False,
+        yearday: bool = False,
+        monthday: bool = False,
+        weekday: bool = False,
+        strftime: str | None = None,
+    ):
+        if strftime:
+            if isinstance(strftime, str):
+                strftime = [strftime]
+            column_names = [
+                f"_strftime_{strftime_.replace('%', '').replace('-', '_')}_"
+                for strftime_ in strftime
+            ]
+        else:
+            strftime = []
+            column_names = []
 
+        if year:
+            strftime.append("%Y")
+            column_names.append("year")
+        if month:
+            strftime.append("%m")
+            column_names.append("month")
+        if week:
+            strftime.append("%W")
+            column_names.append("week")
+        if yearday:
+            strftime.append("%j")
+            column_names.append("year_day")
+        if monthday:
+            strftime.append("%d")
+            column_names.append("month_day")
+        if weekday:
+            strftime.append("%a")
+            column_names.append("week_day")
+
+        self._table = with_strftime_column(
+            table=self._table,
+            timestamp_column=self._timestamp_column,
+            strftime=strftime,
+            column_names=column_names,
+        )
+        
     def iter_batches(
         self,
         which: str = "ddb_rel",

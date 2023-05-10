@@ -91,6 +91,27 @@ def get_timestamp_column(
     ]
 
 
+def get_timestamp_min_max(
+    table: pa.Table
+    | pd.DataFrame
+    | pl.DataFrame
+    | duckdb.DuckDBPyRelation
+    | pa.dataset.Dataset,
+    timestamp_column: str | None = None,
+):
+    if not timestamp_column:
+        timestamp_column = get_timestamp_column(table=table)
+    if not isinstance(table, duckdb.DuckDBPyRelation):
+        return (
+            duckdb.from_arrow(to_arrow(table))
+            .aggregate(f"min({timestamp_column}), max({timestamp_column})")
+            .fetchone()
+        )
+    return table.aggregate(
+        f"min({timestamp_column}), max({timestamp_column})"
+    ).fetchone()
+
+
 def to_arrow(
     table: pa.Table
     | pd.DataFrame
@@ -233,10 +254,10 @@ def to_relation(
         return table
 
     elif isinstance(table, duckdb.DuckDBPyRelation):
-        #table_ = table
-        #if name is not None:
+        # table_ = table
+        # if name is not None:
         #    return ddb.from_query("SELECT * FROM table_").set_alias(name)
-        #else:
+        # else:
         #    return ddb.from_query("SELECT * FROM table_")
         return table
 
@@ -621,8 +642,12 @@ def with_strftime_column(
             for strftime_, column_name in zip(strftime, column_names)
         ]
     )
-    if isinstance(table, pa.Table | pa._dataset.Dataset):
+    if isinstance(table, pa.Table):
         return table_.to_arrow()
+
+    elif isinstance(table, pa._dataset.Dataset):
+        return table_.collect(streaming=True).to_arrow()
+    
     elif isinstance(table, pd.DataFrame):
         return table_.to_pandas()
     else:
