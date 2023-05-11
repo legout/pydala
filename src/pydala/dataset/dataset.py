@@ -761,7 +761,7 @@ class Dataset(BaseDataset):
 
         table_ = eval(f"self.{which}")
 
-        return partition_by(
+        yield from partition_by(
             table_,
             self._timestamp_column,
             columns=columns,
