@@ -20,6 +20,7 @@ from ..utils import humanize_size, humanized_size_to_bytes, run_parallel
 from .utils.dataset import get_arrow_schema, get_file_details, get_unified_schema
 from .utils.schema import convert_schema, sort_schema
 from .utils.table import (
+    add_date_columns,
     distinct_table,
     get_table_delta,
     get_timestamp_column,
@@ -27,10 +28,7 @@ from .utils.table import (
     read_table,
     sort_table,
     to_arrow,
-    with_strftime_column,
     write_table,
-    add_date_columns,
-    get_column_names
 )
 
 
