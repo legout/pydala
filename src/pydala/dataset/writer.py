@@ -191,6 +191,7 @@ class Writer(Dataset):
         partitioning: str | List[str] | None = None,
         partition_flavor: str = "dir",  # "hive" or "dir"
         row_group_size:int=150_000,
+        compression:str="zstd",
         mode: str | None = None,
         format: str | None = None,
         schema: pa.Schema | None = None,
@@ -225,7 +226,7 @@ class Writer(Dataset):
             preload=preload_partitions,
         )
 
-        def _write(names, table):
+        def _write_partition(names, table):
             # names, table = partition
             path = self._gen_partition_path(
                 partitioning=partitioning,
@@ -238,12 +239,13 @@ class Writer(Dataset):
                 format=format,
                 filesystem=self._dir_filesystem,
                 schema=schema,
-                row_group_size=row_group_size
+                row_group_size=row_group_size,
+                compression=compression
             )
 
         _ = Parallel(n_jobs=-1, backend="threading")(
-            delayed(_write)(partition[0], to_arrow(partition[1]))
-            for partition in tqdm.tqdm(partitions)
+            delayed(_write_partition)(name, to_arrow(table))
+            for name, table in tqdm.tqdm(partitions)
         )
         # for partition in tqdm.tqdm(partitions):
         #     partition[0], to_arrow(partition[1])
@@ -276,6 +278,8 @@ def write_dataset(
     batch_size: int = 1_000_000,
     file_size: str | None = None,
     partition_flavor: str = "dir",  # "hive" or "dir"
+    row_group_size:int=150_000,
+    compression:str="zstd",
     sort_by: str | List[str] | None = None,
     ascending: bool | List[bool] = True,
     distinct: bool = False,
@@ -308,6 +312,8 @@ def write_dataset(
         batch_size=batch_size,
         file_size=file_size,
         partition_flavor=partition_flavor,
+        row_group_size=row_group_size,
+        compression=compression,
         sort_by=sort_by,
         ascending=ascending,
         distinct=distinct,

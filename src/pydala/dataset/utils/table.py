@@ -1097,6 +1097,7 @@ def write_table(
     format: str | None = None,
     filesystem: AbstractFileSystem | None = None,
     row_group_size: int | None = None,
+    compression:str="zstd",
     **kwargs,
 ):  # sourcery skip: avoid-builtin-shadow
     if filesystem is None:
@@ -1108,7 +1109,7 @@ def write_table(
 
     if re.sub("\.", "", format) == "parquet":
         pq.write_table(
-            table, path, filesystem=filesystem, row_group_size=row_group_size, **kwargs
+            table, path, filesystem=filesystem, row_group_size=row_group_size, compression=compression, **kwargs
         )
 
     elif re.sub("\.", "", format) == "csv":
@@ -1117,7 +1118,6 @@ def write_table(
             pc.write_csv(table, f, **kwargs)
 
     elif re.sub("\.", "", format) in ["arrow", "ipc", "feather"]:
-        compression = kwargs.pop("compression", None) or "uncompressed"
         with filesystem.open_output_scream(path) as f:
             table = pa.table.from_batches(table.to_batches(), schema=schema)
             pf.write_feather(
