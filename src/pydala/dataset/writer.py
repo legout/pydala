@@ -239,13 +239,13 @@ class Writer(Dataset):
         if partitioning is not None:
         
             _ = Parallel(n_jobs=-1, backend="threading")(
-                delayed(_write_partition)(name, to_arrow(table))
-                for name, table in tqdm.tqdm(partitions)
+                delayed(_write_partition)(names, to_arrow(table))
+                for names, table in tqdm.tqdm(partitions)
             )
         else:
             _ = Parallel(n_jobs=-1, backend="threading")(
-                delayed(_write_partition)(None, to_arrow(table))
-                for name, table in tqdm.tqdm(partitions)
+                delayed(_write_partition)([None], to_arrow(table))
+                for names, table in tqdm.tqdm(partitions)
             )
             
             
