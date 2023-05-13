@@ -224,7 +224,7 @@ class Writer(Dataset):
         def _write_partition(names, table):
             path = self._gen_partition_path(
                 partitioning=partitioning,
-                partitions=list(names)[: len(partitioning)],
+                partitions=list(names)[: len(partitioning)] if partitioning else None,
                 flavor=partition_flavor,
             )
             write_table(
@@ -244,7 +244,7 @@ class Writer(Dataset):
             )
         else:
             _ = Parallel(n_jobs=-1, backend="threading")(
-                delayed(_write_partition)([None], to_arrow(table))
+                delayed(_write_partition)(None, to_arrow(table))
                 for names, table in tqdm.tqdm(partitions)
             )
             
