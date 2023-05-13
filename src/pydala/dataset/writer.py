@@ -152,8 +152,6 @@ class Writer(Dataset):
         preload: bool = False,
         #iter_from: str = "ddb_rel",
     ):
-        partitioning = partitioning or self._partitioning
-
 
         if file_size:
             batch_size = self._estimate_batch_size(file_size=file_size)
@@ -211,7 +209,6 @@ class Writer(Dataset):
             self._get_table_delta(subset=subset)
 
         
-
         partitions = self.iter_partitions(
             batch_size=batch_size,
             file_size=file_size,
@@ -224,9 +221,7 @@ class Writer(Dataset):
             presort=presort,
             preload=preload_partitions,
         )
-
         def _write_partition(names, table):
-            # names, table = partition
             path = self._gen_partition_path(
                 partitioning=partitioning,
                 partitions=list(names)[: len(partitioning)],
@@ -241,13 +236,18 @@ class Writer(Dataset):
                 row_group_size=row_group_size,
                 compression=compression
             )
-
-        _ = Parallel(n_jobs=-1, backend="threading")(
-            delayed(_write_partition)(name, to_arrow(table))
-            for name, table in tqdm.tqdm(partitions)
-        )
-        # for partition in tqdm.tqdm(partitions):
-        #     partition[0], to_arrow(partition[1])
+        if partitioning is not None:
+        
+            _ = Parallel(n_jobs=-1, backend="threading")(
+                delayed(_write_partition)(name, to_arrow(table))
+                for name, table in tqdm.tqdm(partitions)
+            )
+        else:
+            _ = Parallel(n_jobs=-1, backend="threading")(
+                delayed(_write_partition)(None, to_arrow(table))
+                for name, table in tqdm.tqdm(partitions)
+            )
+            
             
         if mode == "overwrite":
             self._dir_filesystem.rm(self.file_details["path"].to_list())
