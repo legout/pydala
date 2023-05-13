@@ -98,7 +98,7 @@ class Writer(Dataset):
         flavor: str | None = None,
     ) -> str:
         if partitioning is None:
-            return self._path
+            return os.path.join(self._path, f"data-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d%H%M%S')}-{random_id()}.{self._format}")
 
         if not isinstance(partitions, list | tuple):
             partitions = [partitions]
