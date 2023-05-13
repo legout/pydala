@@ -61,4 +61,7 @@ examples/*
 .conda*/
 poetry.lock
 .tmp/
+
+# Others
 .vscode
+dev/*

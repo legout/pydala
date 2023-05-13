@@ -89,9 +89,9 @@ def get_timestamp_column(
         table = table.head(10)
         table = to_arrow(table)
 
-    return [col.name for col in table.schema if isinstance(col.type, pa.TimestampType)][
-        0
-    ]
+    timestamp_columns = [col.name for col in table.schema if isinstance(col.type, pa.TimestampType)]
+    if len(timestamp_columns):
+        return timestamp_columns[0]
 
 
 def get_timestamp_min_max(
@@ -105,30 +105,31 @@ def get_timestamp_min_max(
 ):
     if not timestamp_column:
         timestamp_column = get_timestamp_column(table=table)
+    if timestamp_column:
+        if isinstance(table, duckdb.DuckDBPyRelation):
+            return table.aggregate(
+                f"min({timestamp_column}), max({timestamp_column})"
+            ).fetchone()
 
-    if isinstance(table, duckdb.DuckDBPyRelation):
-        return table.aggregate(
-            f"min({timestamp_column}), max({timestamp_column})"
-        ).fetchone()
-
-    elif isinstance(table, pa.Table | pa.dataset.Dataset):
-        return (
-            duckdb.from_arrow(table)
-            .aggregate(f"min({timestamp_column}), max({timestamp_column})")
-            .fetchone()
-        )
-    elif isinstance(table, pd.DataFrame):
-        return (
-            duckdb.from_df(table)
-            .aggregate(f"min({timestamp_column}), max({timestamp_column})")
-            .fetchone()
-        )
-    else:
-        return (
-            duckdb.from_arrow(to_arrow(table.select(timestamp_column)))
-            .aggregate(f"min({timestamp_column}), max({timestamp_column})")
-            .fetchone()
-        )
+        elif isinstance(table, pa.Table | pa.dataset.Dataset):
+            return (
+                duckdb.from_arrow(table)
+                .aggregate(f"min({timestamp_column}), max({timestamp_column})")
+                .fetchone()
+            )
+        elif isinstance(table, pd.DataFrame):
+            return (
+                duckdb.from_df(table)
+                .aggregate(f"min({timestamp_column}), max({timestamp_column})")
+                .fetchone()
+            )
+        else:
+            return (
+                duckdb.from_arrow(to_arrow(table.select(timestamp_column)))
+                .aggregate(f"min({timestamp_column}), max({timestamp_column})")
+                .fetchone()
+            )
+        
 
 
 def get_column_names(

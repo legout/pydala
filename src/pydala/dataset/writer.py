@@ -77,13 +77,12 @@ class Writer(Dataset):
 
         if self._base_dataset and self._timestamp_column is not None:
             self._min_timestamp, self._max_timestamp = get_timestamp_min_max(
-                table, timestamp_column=self._timestamp_column
+                self._table, timestamp_column=self._timestamp_column
             )
-            self.select_files(time_range=[self._min_timestamp, self._max_timestamp])
+            self._load_arrow_dataset(time_range=[self._min_timestamp, self._max_timestamp])
         else:
             self._timestamp_column = get_timestamp_column(table=self._table)
-
-        self._load_arrow_dataset(time_range=[self._min_timestamp, self._max_timestamp])
+  
         #self.register(f"{self.name}_table" if self.name else "_table", self._table)
 
     def sort(self, by: str | List[str], ascending: bool = True):
