@@ -164,20 +164,20 @@ class Writer(Dataset):
         # elif iter_from == "polars":
         #     self._table = self._table.pl()
 
-        if partitioning:
-            batches = self._partition_by(
-                which="_table",
-                n_rows=batch_size,
-                columns=partitioning.copy(),
-                as_dict=True,
-                drop=True,
-                sort_by=sort_by,
-                ascending=ascending,
-                distinct=distinct,
-                subset=subset,
-                presort=presort,
-                keep=keep,
-            )
+        #if partitioning:
+        batches = self._partition_by(
+            which="_table",
+            n_rows=batch_size,
+            columns=partitioning.copy(),
+            as_dict=True,
+            drop=True,
+            sort_by=sort_by,
+            ascending=ascending,
+            distinct=distinct,
+            subset=subset,
+            presort=presort,
+            keep=keep,
+        )
         if preload:
             batches = list(batches)
 
