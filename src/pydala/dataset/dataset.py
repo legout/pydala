@@ -1,7 +1,7 @@
 import datetime as dt
 import os
 import re
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List,  Union
 
 import duckdb
 import pandas as pd
@@ -9,12 +9,10 @@ import polars as pl_
 import pyarrow as pa
 import pyarrow.dataset as pds
 import pyarrow.fs as pafs
-import pyarrow.parquet as pq
 from fsspec import filesystem as fsspec_filesystem
 from fsspec.implementations import dirfs
 from fsspec.spec import AbstractFileSystem
 from fsspec.utils import infer_storage_options
-from zmq import has
 
 from ..utils import humanize_size, humanized_size_to_bytes, run_parallel
 from .utils.dataset import get_arrow_schema, get_file_details, get_unified_schema
