@@ -537,6 +537,7 @@ class Dataset(BaseDataset):
         if self.name:
             self.ddb.sql(f"CREATE OR REPLACE schema {self.name}")
             self.ddb.register(f"{self.name}.{view_name}", py_obj)
+            self.ddb.sql(f"CREATE OR REPLACE view {self.name}.{view_name} AS FROM '{self.name}.{view_name}'")
         else:
             self.ddb.register(view_name, py_obj)
 
@@ -659,14 +660,14 @@ class Dataset(BaseDataset):
         temp = "temp" if temp else ""
         if hasattr(self, "_arrow_table"):
             self.sql(
-                f"CREATE OR REPLACE {temp} table {self.name}.table_{temp} AS FROM arrow_table"
+                f"CREATE OR REPLACE {temp} table {self.name}.table_{temp} AS FROM {self.name}.arrow_table"
             ) if self.name else self.sql(
                 f"CREATE OR REPLACE {temp} table table_{temp} AS FROM arrow_table"
             )
         else:
             _ = self.arrow_dataset
             self.sql(
-                f"CREATE OR REPLACE {temp} table {self.name}.table_{temp} As FROM arrow_dataset"
+                f"CREATE OR REPLACE {temp} table {self.name}.table_{temp} As FROM {self.name}.arrow_dataset"
             ) if self.name else self.sql(
                 f"CREATE OR REPLACE {temp} table table_{temp} As FROM arrow_dataset"
             )
@@ -676,12 +677,12 @@ class Dataset(BaseDataset):
         # existing_tables = [table_[0] for table_ in self.ddb.sql("SHOW TABLES").fetchall()]
         if hasattr(self, "_arrow_table"):
             self.sql(
-                f"INSERT INTO {temp} table {self.name}.table_{temp} FROM arrow_table"
+                f"INSERT INTO {temp} table {self.name}.table_{temp} FROM {self.name}.arrow_table"
             ) if self.name else self.sql(f"INSERT INTO table_{temp} FROM arrow_table")
         else:
             _ = self.arrow_dataset
             self.sql(
-                f"INSERT INTO {temp} table {self.name}.table_{temp} FROM arrow_dataset"
+                f"INSERT INTO {temp} table {self.name}.table_{temp} FROM {self.name}.arrow_dataset"
             ) if self.name else self.sql(f"INSERT INTO table_{temp} FROM arrow_dataset")
 
     def to_ddb_table(self, temp: bool = False):
