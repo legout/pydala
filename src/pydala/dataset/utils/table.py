@@ -90,7 +90,7 @@ def get_timestamp_column(
         table = to_arrow(table)
 
     timestamp_columns = [
-        col.name for col in table.schema if isinstance(col.type, pa.TimestampType)
+        col.name for col in table.schema if col.type in [pa.timestamp("s"), pa.timestamp("ms"), pa.timestamp("us"), pa.timestamp("ns"), pa.date32(), pa.date64()]
     ]
     if len(timestamp_columns):
         return timestamp_columns[0]
