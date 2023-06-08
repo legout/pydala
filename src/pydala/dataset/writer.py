@@ -210,7 +210,7 @@ class Writer(Dataset):
         mode = mode or self._mode
         format = format or self._format
         schema = schema or self.schema if format != "csv" else None
-        partitioning = partitioning or self._partitioning
+        partitioning = partitioning or (self._partitioning if self._partitioning!="hive" else None)
 
         if mode == "delta":
             self._get_table_delta(subset=subset)
