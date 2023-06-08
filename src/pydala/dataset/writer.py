@@ -50,7 +50,7 @@ class Writer(Dataset):
         ddb: duckdb.DuckDBPyConnection | None = None,
         name: str | None = None,
         mode: str = "delta",
-        verbose:bool=True,
+        verbose: bool = True,
         **storage_options,
     ):
         super().__init__(
@@ -63,15 +63,14 @@ class Writer(Dataset):
             timestamp_column=timestamp_column,
             ddb=ddb,
             name=name,
-            verbose=verbose, 
+            verbose=verbose,
             **storage_options,
         )
 
         if isinstance(table, list | tuple):
             table = concat_tables(tables=table, schema=schema)
-            
 
-        self._table = table #to_relation(table, ddb=self.ddb)
+        self._table = table  # to_relation(table, ddb=self.ddb)
         self._mode = mode
 
         self._min_timestamp = None
@@ -81,11 +80,13 @@ class Writer(Dataset):
             self._min_timestamp, self._max_timestamp = get_timestamp_min_max(
                 self._table, timestamp_column=self._timestamp_column
             )
-            self._load_arrow_dataset(time_range=[self._min_timestamp, self._max_timestamp])
+            self._load_arrow_dataset(
+                time_range=[self._min_timestamp, self._max_timestamp]
+            )
         else:
             self._timestamp_column = get_timestamp_column(table=self._table)
-  
-        #self.register(f"{self.name}_table" if self.name else "_table", self._table)
+
+        # self.register(f"{self.name}_table" if self.name else "_table", self._table)
 
     def sort(self, by: str | List[str], ascending: bool = True):
         self._table = sort_table(self._table, sort_by=by, ascending=ascending)
@@ -100,7 +101,10 @@ class Writer(Dataset):
         flavor: str | None = None,
     ) -> str:
         if partitioning is None:
-            return os.path.join(self._path, f"data-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d%H%M%S')}-{random_id()}.{self._format}")
+            return os.path.join(
+                self._path,
+                f"data-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d%H%M%S')}-{random_id()}.{self._format}",
+            )
 
         if not isinstance(partitions, list | tuple):
             partitions = [partitions]
@@ -150,11 +154,10 @@ class Writer(Dataset):
         distinct: bool = False,
         subset: str | None = None,
         keep: str = "first",
-        presort:bool=False, 
+        presort: bool = False,
         preload: bool = False,
-        #iter_from: str = "ddb_rel",
+        # iter_from: str = "ddb_rel",
     ):
-
         if file_size:
             batch_size = self._estimate_batch_size(file_size=file_size)
 
@@ -164,7 +167,7 @@ class Writer(Dataset):
         # elif iter_from == "polars":
         #     self._table = self._table.pl()
 
-        #if partitioning:
+        # if partitioning:
         batches = self._partition_by(
             which="_table",
             n_rows=batch_size,
@@ -189,8 +192,8 @@ class Writer(Dataset):
         file_size: str | None = None,
         partitioning: str | List[str] | None = None,
         partition_flavor: str = "dir",  # "hive" or "dir"
-        row_group_size:int=150_000,
-        compression:str="zstd",
+        row_group_size: int = 150_000,
+        compression: str = "zstd",
         mode: str | None = None,
         format: str | None = None,
         schema: pa.Schema | None = None,
@@ -201,7 +204,7 @@ class Writer(Dataset):
         keep: str = "first",
         presort: bool = False,
         preload_partitions: bool = False,
-        verbose:bool|None=None
+        verbose: bool | None = None,
     ):  # sourcery skip: avoid-builtin-shadow
         verbose = verbose or self._verbose
         mode = mode or self._mode
@@ -212,7 +215,6 @@ class Writer(Dataset):
         if mode == "delta":
             self._get_table_delta(subset=subset)
 
-        
         partitions = self.iter_partitions(
             batch_size=batch_size,
             file_size=file_size,
@@ -225,6 +227,7 @@ class Writer(Dataset):
             presort=presort,
             preload=preload_partitions,
         )
+
         def _write_partition(names, table):
             path = self._gen_partition_path(
                 partitioning=partitioning,
@@ -238,20 +241,21 @@ class Writer(Dataset):
                 filesystem=self._dir_filesystem,
                 schema=schema,
                 row_group_size=row_group_size,
-                compression=compression
+                compression=compression,
             )
+
         if partitioning is not None:
             if verbose:
                 _ = Parallel(n_jobs=-1, backend="threading")(
                     delayed(_write_partition)(names, to_arrow(table))
-                    for names, table in tqdm.tqdm(partitions) 
+                    for names, table in tqdm.tqdm(partitions)
                 )
             else:
-                 _ = Parallel(n_jobs=-1, backend="threading")(
+                _ = Parallel(n_jobs=-1, backend="threading")(
                     delayed(_write_partition)(names, to_arrow(table))
                     for names, table in partitions
                 )
-           
+
         else:
             if verbose:
                 _ = Parallel(n_jobs=-1, backend="threading")(
@@ -263,8 +267,7 @@ class Writer(Dataset):
                     delayed(_write_partition)(None, to_arrow(table))
                     for names, table in tpartitions
                 )
-            
-            
+
         if mode == "overwrite":
             self._dir_filesystem.rm(self.file_details["path"].to_list())
 
@@ -293,8 +296,8 @@ def write_dataset(
     batch_size: int = 1_000_000,
     file_size: str | None = None,
     partition_flavor: str = "dir",  # "hive" or "dir"
-    row_group_size:int=150_000,
-    compression:str="zstd",
+    row_group_size: int = 150_000,
+    compression: str = "zstd",
     sort_by: str | List[str] | None = None,
     ascending: bool | List[bool] = True,
     distinct: bool = False,
@@ -321,7 +324,6 @@ def write_dataset(
 
     if isinstance(writer._partitioning, str):
         writer._partitioning = [writer._partitioning]
-
 
     writer.write(
         batch_size=batch_size,
