@@ -1,7 +1,7 @@
 import datetime as dt
 import os
 from typing import Any, Dict, List
-
+import copy
 import duckdb
 import pandas as pd
 import polars as pl
@@ -171,7 +171,7 @@ class Writer(Dataset):
         batches = self._partition_by(
             which="_table",
             n_rows=batch_size,
-            columns=partitioning.copy() if partitioning is not None else None,
+            columns=copy.copy(partitioning),
             as_dict=True,
             drop=True,
             sort_by=sort_by,
