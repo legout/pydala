@@ -38,7 +38,8 @@ def filesystem_dataset(
     materialize: bool = False,
     combine_chunks: bool = False,
     chunk_size: int = 1_000_000,
-    verbose: bool = True**storage_options,
+    verbose: bool = True,
+    **storage_options,
 ) -> Dataset:
     ds = Dataset(
         path=path,
