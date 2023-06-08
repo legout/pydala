@@ -89,7 +89,9 @@ def get_timestamp_column(
         table = table.head(10)
         table = to_arrow(table)
 
-    timestamp_columns = [col.name for col in table.schema if isinstance(col.type, pa.TimestampType)]
+    timestamp_columns = [
+        col.name for col in table.schema if isinstance(col.type, pa.TimestampType)
+    ]
     if len(timestamp_columns):
         return timestamp_columns[0]
 
@@ -129,7 +131,6 @@ def get_timestamp_min_max(
                 .aggregate(f"min({timestamp_column}), max({timestamp_column})")
                 .fetchone()
             )
-        
 
 
 def get_column_names(
@@ -188,7 +189,7 @@ def to_polars(
     | pl.LazyFrame
     | duckdb.DuckDBPyRelation
     | pa.dataset.Dataset,
-    lazy: bool = True,
+    lazy: bool = False,
 ) -> pl.DataFrame:
     """Converts a pyarrow table/dataset, pandas dataframe or duckdb relation
     into a polars dataframe.
@@ -220,9 +221,7 @@ def to_polars(
     else:
         if lazy:
             return table if isinstance(table, pl.LazyFrame) else table.lazy()
-        return (
-            table.collect(streaming=True) if isinstance(table, pl.LazyFrame) else table
-        )
+        return table
 
 
 def to_pandas(
@@ -298,10 +297,9 @@ def to_relation(
         return table
 
     elif isinstance(table, duckdb.DuckDBPyRelation):
-        #ddb.register("_table_", table)
-        #return ddb.from_query("FROM _table_")
+        # ddb.register("_table_", table)
+        # return ddb.from_query("FROM _table_")
         return table
-        
 
 
 def sort_table(
@@ -1098,7 +1096,7 @@ def write_table(
     format: str | None = None,
     filesystem: AbstractFileSystem | None = None,
     row_group_size: int | None = None,
-    compression:str="zstd",
+    compression: str = "zstd",
     **kwargs,
 ):  # sourcery skip: avoid-builtin-shadow
     if filesystem is None:
@@ -1110,7 +1108,12 @@ def write_table(
 
     if re.sub("\.", "", format) == "parquet":
         pq.write_table(
-            table, path, filesystem=filesystem, row_group_size=row_group_size, compression=compression, **kwargs
+            table,
+            path,
+            filesystem=filesystem,
+            row_group_size=row_group_size,
+            compression=compression,
+            **kwargs,
         )
 
     elif re.sub("\.", "", format) == "csv":
