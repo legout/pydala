@@ -265,7 +265,7 @@ class Writer(Dataset):
             else:
                 _ = Parallel(n_jobs=-1, backend="threading")(
                     delayed(_write_partition)(None, to_arrow(table))
-                    for names, table in tpartitions
+                    for names, table in partitions
                 )
 
         if mode == "overwrite":
