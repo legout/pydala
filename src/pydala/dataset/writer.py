@@ -171,7 +171,7 @@ class Writer(Dataset):
         batches = self._partition_by(
             which="_table",
             n_rows=batch_size,
-            columns=partitioning.copy() if partitioning else None,
+            columns=partitioning.copy() if partitioning is not None else None,
             as_dict=True,
             drop=True,
             sort_by=sort_by,
