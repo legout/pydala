@@ -943,7 +943,7 @@ def partition_by(
         not in [table_col.lower() for table_col in get_column_names(table=table_)]
     }
     if len(date_columns_to_add):
-        table_ = add_date_columns(table=table_, **date_columns_to_add)
+        table_ = add_date_columns(table=table_, timestamp_column=timestamp_column,**date_columns_to_add)
 
     if n_rows:
         table_ = with_row_count(table_, over=columns)
