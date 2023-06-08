@@ -691,7 +691,7 @@ def with_strftime_column(
             )
         )
 
-    table_ = to_polars(table, lazy=True)
+    table_ = to_polars(table)
 
     table_ = table_.with_columns(
         [
