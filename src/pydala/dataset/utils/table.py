@@ -90,7 +90,17 @@ def get_timestamp_column(
         table = to_arrow(table)
 
     timestamp_columns = [
-        col.name for col in table.schema if col.type in [pa.timestamp("s"), pa.timestamp("ms"), pa.timestamp("us"), pa.timestamp("ns"), pa.date32(), pa.date64()]
+        col.name
+        for col in table.schema
+        if col.type
+        in [
+            pa.timestamp("s"),
+            pa.timestamp("ms"),
+            pa.timestamp("us"),
+            pa.timestamp("ns"),
+            pa.date32(),
+            pa.date64(),
+        ]
     ]
     if len(timestamp_columns):
         return timestamp_columns[0]
@@ -943,7 +953,9 @@ def partition_by(
         not in [table_col.lower() for table_col in get_column_names(table=table_)]
     }
     if len(date_columns_to_add):
-        table_ = add_date_columns(table=table_, timestamp_column=timestamp_column,**date_columns_to_add)
+        table_ = add_date_columns(
+            table=table_, timestamp_column=timestamp_column, **date_columns_to_add
+        )
 
     if n_rows:
         table_ = with_row_count(table_, over=columns)

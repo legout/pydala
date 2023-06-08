@@ -38,7 +38,7 @@ def filesystem_dataset(
     materialize: bool = False,
     combine_chunks: bool = False,
     chunk_size: int = 1_000_000,
-    **storage_options,
+    verbose: bool = True**storage_options,
 ) -> Dataset:
     ds = Dataset(
         path=path,
@@ -50,6 +50,7 @@ def filesystem_dataset(
         timestamp_column=timestamp_column,
         ddb=ddb,
         name=name,
+        verbose=verbose,
         **storage_options,
     )
 
@@ -117,6 +118,7 @@ def dataset(
     chunk_size: int = 1_000_000,
     cached: bool = False,
     cache_base_dir: str = "/tmp/pydala",
+    verbose: bool = True,
     **storage_options,
 ) -> Dataset:
     materialize_fs = False if cached else materialize
@@ -137,6 +139,7 @@ def dataset(
         materialize=materialize_fs,
         combine_chunks=combine_chunks,
         chunk_size=chunk_size,
+        verbose=verbose,
         **storage_options,
     )
     if cached:

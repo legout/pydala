@@ -30,7 +30,7 @@ class Repartition:
         self._schema_auto_conversion = schema_auto_conversion
         self._delete_source = delete_source
         self._cached = False
-        
+
         if hasattr(self._reader, "timefly") and add_snapshot:
             reader.timefly.add_snapshot()
 
@@ -66,7 +66,6 @@ class Repartition:
         elif self._source_table == "dataset":
             if not self._reader.has_dataset:
                 self._reader.load_dataset()
-
 
         self._source = self._reader.rel
 

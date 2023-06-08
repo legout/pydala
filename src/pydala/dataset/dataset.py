@@ -1,7 +1,7 @@
 import datetime as dt
 import os
 import re
-from typing import Dict, List,  Union
+from typing import Dict, List, Union
 
 import duckdb
 import pandas as pd
@@ -42,8 +42,10 @@ class BaseDataset:
         timestamp_column: str | None = None,
         ddb: duckdb.DuckDBPyConnection | None = None,
         name: str | None = None,
+        verbose: bool = True,
         **storage_options,
     ):
+        self._verbose = verbose
         so = infer_storage_options(path)
         self._protocol = storage_options.pop("protocol", None) or so["protocol"]
         bucket = bucket or ""
@@ -412,7 +414,9 @@ class BaseDataset:
         if self.schemas_equal:
             return
         else:
-            run_parallel(_repair_schema, self.schemas, backend="threading")
+            run_parallel(
+                _repair_schema, self.schemas, backend="threading", verbose=self._verbose
+            )
 
 
 class Dataset(BaseDataset):
@@ -427,6 +431,7 @@ class Dataset(BaseDataset):
         timestamp_column: str | None = None,
         ddb: duckdb.DuckDBPyConnection | None = None,
         name: str | None = None,
+        verbose: bool = True,
         **storage_options,
     ):
         super().__init__(
@@ -439,6 +444,7 @@ class Dataset(BaseDataset):
             timestamp_column=timestamp_column,
             ddb=ddb,
             name=name,
+            verbose=verbose,
             **storage_options,
         )
 
@@ -462,6 +468,7 @@ class Dataset(BaseDataset):
                     filesystem=self._dir_filesystem,
                     partitioning=self._partitioning,
                     backend="threading",
+                    verbose=self._verbose,
                 )
             )
 
@@ -537,7 +544,9 @@ class Dataset(BaseDataset):
         if self.name:
             self.ddb.sql(f"CREATE OR REPLACE schema {self.name}")
             self.ddb.register(f"{self.name}.{view_name}", py_obj)
-            self.ddb.sql(f"CREATE OR REPLACE view {self.name}.{view_name} AS FROM '{self.name}.{view_name}'")
+            self.ddb.sql(
+                f"CREATE OR REPLACE view {self.name}.{view_name} AS FROM '{self.name}.{view_name}'"
+            )
         else:
             self.ddb.register(view_name, py_obj)
 
@@ -754,8 +763,6 @@ class Dataset(BaseDataset):
         keep: str = "first",
         presort: bool = False,
     ):
-        
-
         table_ = eval(f"self.{which}")
 
         yield from partition_by(

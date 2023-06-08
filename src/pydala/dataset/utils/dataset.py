@@ -150,7 +150,7 @@ def sync_datasets(
         )
 
     if delete and len(m2.keys()):
-        rm_keys = [k for k in m2 not in keys]
+        rm_keys = list(m2 not in keys)
 
         if len(rm_keys):
             del_(keys=rm_keys)

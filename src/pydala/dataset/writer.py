@@ -50,6 +50,7 @@ class Writer(Dataset):
         ddb: duckdb.DuckDBPyConnection | None = None,
         name: str | None = None,
         mode: str = "delta",
+        verbose:bool=True,
         **storage_options,
     ):
         super().__init__(
@@ -62,6 +63,7 @@ class Writer(Dataset):
             timestamp_column=timestamp_column,
             ddb=ddb,
             name=name,
+            verbose=verbose, 
             **storage_options,
         )
 
@@ -199,7 +201,9 @@ class Writer(Dataset):
         keep: str = "first",
         presort: bool = False,
         preload_partitions: bool = False,
+        verbose:bool|None=None
     ):  # sourcery skip: avoid-builtin-shadow
+        verbose = verbose or self._verbose
         mode = mode or self._mode
         format = format or self._format
         schema = schema or self.schema if format != "csv" else None
@@ -237,16 +241,28 @@ class Writer(Dataset):
                 compression=compression
             )
         if partitioning is not None:
-        
-            _ = Parallel(n_jobs=-1, backend="threading")(
-                delayed(_write_partition)(names, to_arrow(table))
-                for names, table in tqdm.tqdm(partitions)
-            )
+            if verbose:
+                _ = Parallel(n_jobs=-1, backend="threading")(
+                    delayed(_write_partition)(names, to_arrow(table))
+                    for names, table in tqdm.tqdm(partitions) 
+                )
+            else:
+                 _ = Parallel(n_jobs=-1, backend="threading")(
+                    delayed(_write_partition)(names, to_arrow(table))
+                    for names, table in partitions
+                )
+           
         else:
-            _ = Parallel(n_jobs=-1, backend="threading")(
-                delayed(_write_partition)(None, to_arrow(table))
-                for names, table in tqdm.tqdm(partitions)
-            )
+            if verbose:
+                _ = Parallel(n_jobs=-1, backend="threading")(
+                    delayed(_write_partition)(None, to_arrow(table))
+                    for names, table in tqdm.tqdm(partitions)
+                )
+            else:
+                _ = Parallel(n_jobs=-1, backend="threading")(
+                    delayed(_write_partition)(None, to_arrow(table))
+                    for names, table in tpartitions
+                )
             
             
         if mode == "overwrite":
