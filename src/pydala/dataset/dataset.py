@@ -91,6 +91,7 @@ class BaseDataset:
         self._set_file_details()
 
     def _check_path_exists(self):
+        self._dir_filesystem.invalidate_cache()
         self._path_exists = self._dir_filesystem.exists(self._path)
         self._path_empty = (
             self._dir_filesystem.du(self._path) == 0 if self._path_exists else True
@@ -285,7 +286,7 @@ class BaseDataset:
         | None = None,
         row_count: int | List[Union[int, None]] | None = None,
         **kwargs,
-    ):
+    ):  
         self._check_path_exists()
 
         if self._path_empty:
@@ -301,7 +302,6 @@ class BaseDataset:
             last_modified=last_modified,
             row_count=row_count,
         )
-
         self._arrow_dataset = pds.dataset(
             self.selected_files,
             format=self._format,
@@ -400,6 +400,7 @@ class BaseDataset:
 
     def repair_schema(self):
         def _repair_schema(path):
+            self._dir_filesystem.invalidate_cache()
             schema = self.schemas[path]
             if schema != self.schema:
                 table = read_table(
