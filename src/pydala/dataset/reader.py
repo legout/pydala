@@ -73,6 +73,7 @@ def filesystem_dataset(
 def cache_dataset(
     dataset: Dataset,
     cache_base_dir: str = "/tmp/pydala",
+    verbose:bool=True
 ) -> Dataset:
     cache_dataset_ = filesystem_dataset(
         path=dataset._path,
@@ -84,7 +85,7 @@ def cache_dataset(
         name=f"{dataset.name}_cache_",
         ddb=dataset.ddb,
     )
-    sync_datasets(dataset1=dataset, dataset2=cache_dataset_, delete=True)
+    sync_datasets(dataset1=dataset, dataset2=cache_dataset_, delete=True, verbose=verbose)
 
     cache_dataset_.reload()
     return cache_dataset_

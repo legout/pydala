@@ -140,6 +140,7 @@ class BaseDataset:
                 self._base_dataset,
                 timestamp_column=self._timestamp_column,
                 filesystem=self._dir_filesystem,
+                verbose=self._verbose
             )
 
             self.size = self.file_details["size"].sum()

@@ -11,12 +11,12 @@ from ...utils import run_parallel
 from .schema import get_unify_schema
 
 
-def get_arrow_schema(dataset: pa.dataset.Dataset) -> Dict[str, pa.Schema]:
+def get_arrow_schema(dataset: pa.dataset.Dataset, verbose:bool=True) -> Dict[str, pa.Schema]:
     def _get_physical_schema(frag):
         return frag.path, frag.physical_schema
 
     pa_schemas = run_parallel(
-        _get_physical_schema, dataset.get_fragments(), backend="threading"
+        _get_physical_schema, dataset.get_fragments(), backend="threading", verbose=verbose
     )
     return dict(pa_schemas)
 
@@ -39,6 +39,7 @@ def get_file_details(
     dataset: pa.dataset.Dataset,
     timestamp_column: str | None = None,
     filesystem: AbstractFileSystem | None = None,
+    verbose:bool=True
 ) -> pl.DataFrame:
     if filesystem is None:
         filesystem = ArrowFSWrapper(dataset.filesystem)
@@ -49,7 +50,7 @@ def get_file_details(
 
     dirnames = {os.path.dirname(f) for f in details["path"]}
 
-    sizes = run_parallel(filesystem.du, dirnames, total=False, backend="threading")
+    sizes = run_parallel(filesystem.du, dirnames, total=False, backend="threading", verbose=verbose)
     details["size"] = {}
     for s in sizes:
         details["size"].update(s)
@@ -60,7 +61,7 @@ def get_file_details(
         return frag.path, frag.count_rows()
 
     details["row_count"] = dict(
-        run_parallel(_get_count_rows, dataset.get_fragments(), backend="threading")
+        run_parallel(_get_count_rows, dataset.get_fragments(), backend="threading", verbose=verbose)
     )
 
     details = pd.concat(
@@ -92,6 +93,7 @@ def get_file_details(
                 dataset.get_fragments(),
                 timestamp_column,
                 backend="threading",
+                verbose=verbose
             )
         )
 
@@ -129,6 +131,7 @@ def sync_datasets(
     path2: str | None = None,
     keys: str | None = None,
     delete: bool = True,
+    verbose:bool=True
 ):
     def sync(key: str):
         m2[key] = m1[key]
@@ -147,6 +150,7 @@ def sync_datasets(
             sync,
             keys,
             backend="loky",
+            verbose=verbose
         )
 
     if delete and len(m2.keys()):
