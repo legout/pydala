@@ -315,10 +315,11 @@ class BaseDataset:
                 else self._schema,
                 **kwargs,
             )
+            self.register("arrow_dataset", self._arrow_dataset)
         else:
             self._arrow_dataset = None
 
-        self.register("arrow_dataset", self._arrow_dataset)
+        
 
     @property
     def arrow_schemas(self):
