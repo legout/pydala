@@ -127,14 +127,16 @@ class Writer(Dataset):
     ) -> duckdb.DuckDBPyRelation:
         if not self._path_empty:
             if self._timestamp_column:
-                self._table = get_table_delta(
-                    table1=self._table,
-                    table2=self.ddb_rel.filter(
-                        f"{self._timestamp_column}>='{self._min_timestamp}' AND {self._timestamp_column}<='{self._max_timestamp}'"
-                    ),
-                    ddb=self.ddb,
-                    subset=subset,
-                )
+                self._load_arrow_dataset(time_range=[self._min_timestamp, self._max_timestamp])
+                if self._arrow_dataset is not None:
+                    self._table = get_table_delta(
+                        table1=self._table,
+                        table2=self.ddb_rel.filter(
+                            f"{self._timestamp_column}>='{self._min_timestamp}' AND {self._timestamp_column}<='{self._max_timestamp}'"
+                        ),
+                        ddb=self.ddb,
+                        subset=subset,
+                    )
 
             else:
                 self._table = get_table_delta(
@@ -243,6 +245,7 @@ class Writer(Dataset):
                 row_group_size=row_group_size,
                 compression=compression,
             )
+            self._dir_filesystem.invalidate_cache()
 
         if partitioning is not None:
             if verbose:
