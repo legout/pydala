@@ -91,6 +91,7 @@ class BaseDataset:
         self._set_file_details()
 
     def _check_path_exists(self):
+        self._filesystem.invalidate_cache()
         self._dir_filesystem.invalidate_cache()
         self._path_exists = self._dir_filesystem.exists(self._path)
         self._path_empty = (
@@ -302,17 +303,20 @@ class BaseDataset:
             last_modified=last_modified,
             row_count=row_count,
         )
-        self._arrow_dataset = pds.dataset(
-            self.selected_files,
-            format=self._format,
-            filesystem=self._dir_filesystem,
-            partitioning=self._partitioning,
-            partition_base_dir=self._path,
-            schema=self._arrow_schema
-            if hasattr(self, "_arrow_schema")
-            else self._schema,
-            **kwargs,
-        )
+        if len(self.select_files):
+            self._arrow_dataset = pds.dataset(
+                self.selected_files,
+                format=self._format,
+                filesystem=self._dir_filesystem,
+                partitioning=self._partitioning,
+                partition_base_dir=self._path,
+                schema=self._arrow_schema
+                if hasattr(self, "_arrow_schema")
+                else self._schema,
+                **kwargs,
+            )
+        else:
+            self._arrow_dataset = None
 
         self.register("arrow_dataset", self._arrow_dataset)
 
