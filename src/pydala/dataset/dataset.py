@@ -303,7 +303,7 @@ class BaseDataset:
             last_modified=last_modified,
             row_count=row_count,
         )
-        if len(self.select_files):
+        if len(self.selected_files):
             self._arrow_dataset = pds.dataset(
                 self.selected_files,
                 format=self._format,
