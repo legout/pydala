@@ -50,6 +50,7 @@ class Writer(Dataset):
         ddb: duckdb.DuckDBPyConnection | None = None,
         name: str | None = None,
         mode: str = "delta",
+        ignore_timestamps:bool=False,
         verbose: bool = True,
         **storage_options,
     ):
@@ -75,6 +76,7 @@ class Writer(Dataset):
 
         self._min_timestamp = None
         self._max_timestamp = None
+        self._ignore_timestamps = ignore_timestamps
 
         if self._base_dataset and self._timestamp_column is not None:
             self._min_timestamp, self._max_timestamp = get_timestamp_min_max(
@@ -123,10 +125,10 @@ class Writer(Dataset):
         )
 
     def _get_table_delta(
-        self, subset: str | List[str] | None = None
+        self, subset: str | List[str] | None = None, ignore_timestamps:bool=False
     ) -> duckdb.DuckDBPyRelation:
         if not self._path_empty:
-            if self._timestamp_column:
+            if self._timestamp_column and not ignore_timestamps:
                 self._load_arrow_dataset(time_range=[self._min_timestamp, self._max_timestamp])
                 if self._arrow_dataset is not None:
                     self._table = get_table_delta(
@@ -193,7 +195,7 @@ class Writer(Dataset):
         batch_size: int = 1_000_000,
         file_size: str | None = None,
         partitioning: str | List[str] | None = None,
-        partition_flavor: str = "dir",  # "hive" or "dir"
+        partition_flavor: str = "hive",  # "hive" or "dir"
         row_group_size: int = 150_000,
         compression: str = "zstd",
         mode: str | None = None,
@@ -215,7 +217,7 @@ class Writer(Dataset):
         partitioning = partitioning or (self._partitioning if self._partitioning!="hive" else None)
 
         if mode == "delta":
-            self._get_table_delta(subset=subset)
+            self._get_table_delta(subset=subset, ignore_timestamps=self._ignore_timestamps)
 
         partitions = self.iter_partitions(
             batch_size=batch_size,
