@@ -539,7 +539,7 @@ def get_table_delta(
 
         diff_ = subset_table1_.except_(subset_table2_)
 
-        diff = to_polars(table1, lazy=True).filter(
+        diff = to_polars(table1, lazy=False).filter(
             pl.struct(subset).is_in(diff_.arrow().to_pylist())
         )
 
