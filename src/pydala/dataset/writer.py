@@ -309,7 +309,7 @@ def write_dataset(
     subset: str | List[str] | None = None,
     keep: str = "first",
     presort: bool = False,
-    preload_batches: bool = False,
+    preload_partitions:bool=False,
     **storage_options,
 ):
     writer = Writer(
@@ -342,5 +342,5 @@ def write_dataset(
         subset=subset,
         keep=keep,
         presort=presort,
-        preload_batches=preload_batches,
+        preload_partitions=preload_partitions
     )
