@@ -79,7 +79,7 @@ def compact(
         timestamp_column=timestamp_column,
         ddb=ddb,
         name=name,
-        mode="overwrite",
+        mode="append",
         batch_size=batch_size,
         file_size=file_size,
         row_group_size=row_group_size,
@@ -93,6 +93,8 @@ def compact(
         preload_partitions=preload_partitions,
         **storage_options,
     )
+    
+    ds._dir_filesystem.rm(ds.selected_files)
 
 
 def zorder():
