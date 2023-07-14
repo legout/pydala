@@ -92,7 +92,10 @@ class BaseDataset:
         self._set_file_details()
         if self._partitioning == "hive":
             self._partition_flavor="hive"
-            self._partition_columns=[part.split("=")[0] for part in self.file_details["path"][0].split("/") if "=" in part]
+            if self.file_details is not None:
+                self._partition_columns=[part.split("=")[0] for part in self.file_details["path"][0].split("/") if "=" in part]
+            else:
+                self._partition_columns = []
         else:
             self._partition_flavor="dir"
             self._partition_columns = self._partitioning
