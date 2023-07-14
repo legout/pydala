@@ -63,7 +63,8 @@ def compact(
         row_count=row_count,
         cache_base_dir=cache_base_dir,
         cached=cached,
-        verbose=verbose**storage_options,
+        verbose=verbose,
+        **storage_options,
     )
 
     write_dataset(
