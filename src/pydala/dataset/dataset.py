@@ -60,6 +60,13 @@ class BaseDataset:
 
         self._format = re.sub("\.", "", format)
         self._partitioning = partitioning
+        if self._partitioning == "hive":
+            self._partition_flavor="hive"
+            self._partition_columns=[part.split("=")[0] for part in self._path.split("/") if "=" in part]
+        else:
+            self._partition_flavor="dir"
+            self._partition_columns = self._partitioning
+            
         self.ddb = (
             ddb.cursor()
             if isinstance(ddb, duckdb.DuckDBPyConnection)

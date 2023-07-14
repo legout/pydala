@@ -1139,3 +1139,15 @@ def write_table(
             pf.write_feather(
                 f, compression=compression, chunksize=row_group_size, **kwargs
             )
+
+
+import pyarrow.dataset as pds
+import duckdb
+
+from fsspec import filesystem
+
+
+fs = filesystem(key="volker", secret="s78anwg9", endpoint_url="http://192.168.2.50:9000", protocol="s3")
+con=duckdb.connect()
+ds=pds.dataset("yfin-db/symbol_info", partitioning="hive", filesystem=fs)
+symbols=con.sql("FROM ds").filter("exchange='NMS'").project("symbol").distinct().pl()["symbol"].to_list()
