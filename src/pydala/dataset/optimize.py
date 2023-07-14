@@ -12,6 +12,7 @@ import datetime as dt
 def compact(
     path: str,
     bucket: str | None = None,
+    table_type:str="ddb_rel",
     schema: pa.Schema | dict[str, str] | None = None,
     format: str = "parquet",
     filesystem: AbstractFileSystem | None = None,
@@ -66,9 +67,9 @@ def compact(
         verbose=verbose,
         **storage_options,
     )
-
+    table = eval(f"ds.{table_type}")
     write_dataset(
-        table=ds.ddb_rel,
+        table=table,
         path=path,
         bucket=bucket,
         schema=schema,
