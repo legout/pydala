@@ -93,7 +93,9 @@ class BaseDataset:
         if self._partitioning == "hive":
             self._partition_flavor="hive"
             if self.file_details is not None:
-                self._partition_columns=[part.split("=")[0] for part in self.file_details["path"][0].split("/") if "=" in part]
+                partition_columns=[part.split("=")[0] for part in self.file_details["path"][0].split("/") if "=" in part]
+                self._partition_columns = [part for part in partition_columns if f"{part}=" not in self._path]
+                
             else:
                 self._partition_columns = []
         else:
