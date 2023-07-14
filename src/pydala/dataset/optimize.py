@@ -61,7 +61,6 @@ def compact(
         file_size=file_size,
         last_modified=last_modified,
         row_count=row_count,
-        last_modified=last_modified,
         cache_base_dir=cache_base_dir,
         cached=cached,
         verbose=verbose**storage_options,
